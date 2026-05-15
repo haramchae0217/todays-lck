@@ -24,16 +24,18 @@ class LckMatch {
   bool get isUpcoming => state == 'unstarted';
 
   factory LckMatch.fromJson(Map<String, dynamic> json) {
-    final teams = json['match']['teams'] as List;
+    final match = json['match'] as Map<String, dynamic>;
+    final teams = (match['teams'] as List?) ?? [];
+    if (teams.length < 2) throw FormatException('팀 데이터 부족: ${match['id']}');
     return LckMatch(
-      id: json['match']['id'],
+      id: match['id'] ?? '',
       startTime: DateTime.parse(json['startTime']).toLocal(),
-      state: json['state'],
+      state: json['state'] ?? 'unstarted',
       blockName: json['blockName'] ?? '',
       team1: MatchTeam.fromJson(teams[0]),
       team2: MatchTeam.fromJson(teams[1]),
-      bestOf: json['match']['strategy']['count'],
-      hasVod: (json['match']['flags'] as List?)?.contains('hasVod') ?? false,
+      bestOf: match['strategy']?['count'] ?? 3,
+      hasVod: (match['flags'] as List?)?.contains('hasVod') ?? false,
     );
   }
 }

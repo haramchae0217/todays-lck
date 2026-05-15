@@ -59,16 +59,21 @@ class LckApiService {
     );
   }
 
+  // 2026 시즌 기준 활동 중인 LCK 10개 팀 코드
+  static const _activeLckTeamCodes = {
+    'T1', 'GEN', 'HLE', 'KT', 'DK', 'NS', 'BRO', 'BFX', 'KRX', 'DNS',
+  };
+
   Future<List<Team>> getLckTeams() async {
     return _get(
       'getTeams?hl=ko-KR',
       (data) {
         final teams = data['teams'] as List;
         return teams
-            .where((t) => t['homeLeague']?['name'] == 'LCK')
+            .where((t) => _activeLckTeamCodes.contains(t['code']))
             .map((t) => Team.fromJson(t))
-            .where((t) => t.players.isNotEmpty)
-            .toList();
+            .toList()
+          ..sort((a, b) => a.code.compareTo(b.code));
       },
     );
   }
