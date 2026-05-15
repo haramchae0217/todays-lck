@@ -1,0 +1,40 @@
+name: lck_app
+description: "LCK 리그 오브 레전드 프로 경기 정보 앱"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 네트워크
+  http: ^1.2.0
+  cached_network_image: ^3.3.1
+
+  # 상태관리
+  flutter_riverpod: ^2.5.1
+
+  # 로컬 캐싱
+  hive_flutter: ^1.1.0
+
+  # 날짜 포맷
+  intl: ^0.19.0
+
+  # Firebase (알림)
+  firebase_core: ^3.0.0
+  firebase_messaging: ^15.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  hive_generator: ^2.0.1
+  build_runner: ^2.4.9
+
+flutter:
+  uses-material-design: true
