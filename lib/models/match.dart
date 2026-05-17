@@ -7,6 +7,8 @@ class LckMatch {
   final MatchTeam team2;
   final int bestOf;
   final bool hasVod;
+  final String leagueName;
+  final String leagueSlug;
 
   const LckMatch({
     required this.id,
@@ -17,6 +19,8 @@ class LckMatch {
     required this.team2,
     required this.bestOf,
     required this.hasVod,
+    required this.leagueName,
+    required this.leagueSlug,
   });
 
   bool get isCompleted => state == 'completed';
@@ -27,6 +31,7 @@ class LckMatch {
     final match = json['match'] as Map<String, dynamic>;
     final teams = (match['teams'] as List?) ?? [];
     if (teams.length < 2) throw FormatException('팀 데이터 부족: ${match['id']}');
+    final league = json['league'] as Map<String, dynamic>? ?? {};
     return LckMatch(
       id: match['id'] ?? '',
       startTime: DateTime.parse(json['startTime']).toLocal(),
@@ -36,6 +41,8 @@ class LckMatch {
       team2: MatchTeam.fromJson(teams[1]),
       bestOf: match['strategy']?['count'] ?? 3,
       hasVod: (match['flags'] as List?)?.contains('hasVod') ?? false,
+      leagueName: league['name'] ?? '',
+      leagueSlug: league['slug'] ?? '',
     );
   }
 }

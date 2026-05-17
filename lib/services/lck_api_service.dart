@@ -19,7 +19,7 @@ class LckApiService {
   Future<List<LckMatch>> getSchedule({String? pageToken}) async {
     final tokenParam = pageToken != null ? '&pageToken=$pageToken' : '';
     return _get(
-      'getSchedule?hl=ko-KR&leagueId=${ApiConstants.lckLeagueId}$tokenParam',
+      'getSchedule?hl=ko-KR&leagueId=${ApiConstants.scheduleLeagueIds}$tokenParam',
       (data) {
         final events = data['schedule']['events'] as List;
         return events
@@ -64,13 +64,31 @@ class LckApiService {
     'T1', 'GEN', 'HLE', 'KT', 'DK', 'NS', 'BRO', 'BFX', 'KRX', 'DNS',
   };
 
+  static const _subTeamKeywords = [
+    'academy', 'challengers', 'toberemoved', 'rookies', 'youth',
+  ];
+
   Future<List<Team>> getLckTeams() async {
     return _get(
       'getTeams?hl=ko-KR',
       (data) {
         final teams = data['teams'] as List;
-        return teams
-            .where((t) => _activeLckTeamCodes.contains(t['code']))
+
+        // 코드별로 서브팀 제외 후 선수 수 가장 많은 팀 선택
+        final best = <String, Map<String, dynamic>>{};
+        for (final t in teams) {
+          final code = t['code'] as String? ?? '';
+          if (!_activeLckTeamCodes.contains(code)) continue;
+          final name = (t['name'] as String? ?? '').toLowerCase();
+          if (_subTeamKeywords.any((k) => name.contains(k))) continue;
+          final playerCount = (t['players'] as List? ?? []).length;
+          if (!best.containsKey(code) ||
+              playerCount > (best[code]!['players'] as List).length) {
+            best[code] = t;
+          }
+        }
+
+        return best.values
             .map((t) => Team.fromJson(t))
             .toList()
           ..sort((a, b) => a.code.compareTo(b.code));
@@ -82,6 +100,20 @@ class LckApiService {
     return _get(
       'getTeams?hl=ko-KR&id=$slug',
       (data) => Team.fromJson((data['teams'] as List)[0]),
+    );
+  }
+
+  Future<String?> getLckLeagueImage() async {
+    return _get(
+      'getLeagues?hl=ko-KR',
+      (data) {
+        final leagues = data['leagues'] as List;
+        final lck = leagues.firstWhere(
+          (l) => l['slug'] == 'lck',
+          orElse: () => null,
+        );
+        return lck?['image'] as String?;
+      },
     );
   }
 

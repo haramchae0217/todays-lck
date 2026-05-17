@@ -1,5 +1,6 @@
 class Team {
   final String id;
+  final String slug;
   final String name;
   final String code;
   final String imageUrl;
@@ -7,6 +8,7 @@ class Team {
 
   const Team({
     required this.id,
+    required this.slug,
     required this.name,
     required this.code,
     required this.imageUrl,
@@ -15,7 +17,8 @@ class Team {
 
   factory Team.fromJson(Map<String, dynamic> json) {
     return Team(
-      id: json['id'] ?? json['slug'] ?? '',
+      id: json['id'] ?? '',
+      slug: json['slug'] ?? '',
       name: json['name'],
       code: json['code'],
       imageUrl: json['image'] ?? '',
