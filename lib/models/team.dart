@@ -21,7 +21,7 @@ class Team {
       slug: json['slug'] ?? '',
       name: json['name'],
       code: json['code'],
-      imageUrl: json['image'] ?? '',
+      imageUrl: (json['image'] as String? ?? '').replaceFirst('http://', 'https://'),
       players: (json['players'] as List? ?? [])
           .map((p) => Player.fromJson(p))
           .toList(),

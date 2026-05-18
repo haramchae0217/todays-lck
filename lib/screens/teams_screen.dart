@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import '../services/lck_api_service.dart';
 import '../models/team.dart';
 import 'team_detail_screen.dart';
@@ -60,11 +59,11 @@ class _TeamCard extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CachedNetworkImage(
-              imageUrl: team.imageUrl,
+            Image.network(
+              team.imageUrl,
               width: 64,
               height: 64,
-              errorWidget: (_, __, ___) => const Icon(Icons.shield, size: 64),
+              errorBuilder: (_, __, ___) => const Icon(Icons.shield, size: 64),
             ),
             const SizedBox(height: 8),
             Text(team.code,

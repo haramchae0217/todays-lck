@@ -70,7 +70,7 @@ class MatchTeam {
     return MatchTeam(
       name: json['name'],
       code: json['code'],
-      imageUrl: json['image'] ?? '',
+      imageUrl: (json['image'] as String? ?? '').replaceFirst('http://', 'https://'),
       outcome: json['result']?['outcome'],
       gameWins: json['result']?['gameWins'] ?? 0,
       wins: json['record']?['wins'] ?? 0,
