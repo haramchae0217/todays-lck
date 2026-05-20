@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../constants/api.dart';
 import '../models/match.dart';
-import '../models/match_detail.dart' show MatchDetail, GameTeamStats;
+import '../models/match_detail.dart' show MatchDetail, GameDetail, GameTeamStats;
 import '../models/standing.dart';
 import '../models/team.dart';
 
@@ -651,8 +651,8 @@ class LckApiService {
   // Special:CargoExport 엔드포인트 — api.php와 달리 rate limit 없음
   Future<List<({int gameN, int heralds1, int heralds2, int grubs1, int grubs2, List<String> bans1, List<String> bans2})>>
       _getLeaguepediaStats(String team1Code, String team2Code, DateTime matchDate) async {
-    final t1Aliases = _leaguepediaTeamAliases[team1Code] ?? [];
-    final t2Aliases = _leaguepediaTeamAliases[team2Code] ?? [];
+    final t1Aliases = _leaguepediaTeamAliases[team1Code] ?? [team1Code];
+    final t2Aliases = _leaguepediaTeamAliases[team2Code] ?? [team2Code];
     if (t1Aliases.isEmpty || t2Aliases.isEmpty) return [];
 
     final cacheKey = 'lpedia3_${team1Code}_${team2Code}_${matchDate.toUtc().toIso8601String().substring(0, 10)}';
@@ -671,7 +671,7 @@ class LckApiService {
       final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
         'tables': 'ScoreboardGames',
         'fields': 'Team1,Team2,DateTime_UTC,Team1RiftHeralds,Team2RiftHeralds,Team1VoidGrubs,Team2VoidGrubs,Team1Bans,Team2Bans',
-        'where': "_pageName LIKE 'LCK/2026%' AND DateTime_UTC > '$d0' AND DateTime_UTC < '$d1'",
+        'where': "(_pageName LIKE 'LCK/${matchDate.year}%' OR _pageName LIKE 'First Stand/${matchDate.year}%' OR _pageName LIKE 'Season Kickoff/${matchDate.year}%' OR _pageName LIKE 'MSI/${matchDate.year}%' OR _pageName LIKE 'Worlds/${matchDate.year}%') AND DateTime_UTC > '$d0' AND DateTime_UTC < '$d1'",
         'format': 'json',
         'limit': '50',
       });
@@ -855,7 +855,7 @@ class LckApiService {
     try {
       final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
         'tables': 'MatchSchedule',
-        'fields': 'Team1,Team2,Team1Score,Team2Score,Winner,DateTime_UTC,OverviewPage,BestOf',
+        'fields': 'Tab,Team1,Team2,Team1Score,Team2Score,Winner,DateTime_UTC,OverviewPage,BestOf',
         'where': '($where)',
         'order by': 'DateTime_UTC ASC',
         'format': 'json',
@@ -891,7 +891,13 @@ class LckApiService {
         final dateStr = (row['DateTime UTC']?.toString() ?? row['DateTime_UTC']?.toString() ?? '').trim();
         if (dateStr.length < 10) continue;
         DateTime startTime;
-        try { startTime = DateTime.parse(dateStr); } catch (_) { continue; }
+        try {
+          // Leaguepedia DateTime_UTC is always UTC — append Z so Dart parses correctly
+          final utcStr = dateStr.contains('Z') || dateStr.contains('+')
+              ? dateStr
+              : dateStr.replaceAll(' ', 'T') + 'Z';
+          startTime = DateTime.parse(utcStr).toLocal();
+        } catch (_) { continue; }
 
         final winnerName = (row['Winner']?.toString() ?? '').trim();
         final winnerCode = _lpNameToCode[winnerName] ?? (winnerName.isNotEmpty ? _deriveTeamCode(winnerName) : null);
@@ -899,13 +905,14 @@ class LckApiService {
         final t2Score = int.tryParse(row['Team2Score']?.toString() ?? '') ?? 0;
         final bestOf = int.tryParse(row['BestOf']?.toString() ?? '') ?? 3;
         final overviewPage = (row['OverviewPage']?.toString() ?? '').trim();
+        final tab = (row['Tab']?.toString() ?? '').trim();
         final state = winnerName.isNotEmpty ? 'completed' : 'unstarted';
 
         matches.add(LckMatch(
           id: 'lp_${overviewPage}_${t1Code}_${t2Code}_$i',
           startTime: startTime,
           state: state,
-          blockName: overviewPage,
+          blockName: tab.isNotEmpty ? tab : overviewPage,
           team1: MatchTeam(
             name: t1Name, code: t1Code,
             imageUrl: imagesByCode[t1Code] ?? '',
@@ -1062,6 +1069,257 @@ class LckApiService {
       debugPrint('[LP] parse standings error: $e');
       return {};
     }
+  }
+
+  // OverviewPage를 match ID에서 추출 (lp_${overviewPage}_T1_GEN_42 형식)
+  String? _extractOverviewPage(String matchId) {
+    if (!matchId.startsWith('lp_')) return null;
+    final inner = matchId.substring(3);
+    final m = RegExp(r'_[A-Z0-9?]{1,5}_[A-Z0-9?]{1,5}_\d+$').firstMatch(inner);
+    return m != null ? inner.substring(0, m.start) : null;
+  }
+
+  String _slugToLpPageFilter(String slug, int year) {
+    switch (slug) {
+      case 'msi': return "_pageName LIKE 'MSI/$year%'";
+      case 'worlds': return "_pageName LIKE 'Worlds/$year%'";
+      case 'first_stand': return "_pageName LIKE 'First Stand/$year%' OR _pageName LIKE 'Season Kickoff/$year%'";
+      case 'lck_cup': return "_pageName LIKE 'LCK/$year%Cup%'";
+      default: return "_pageName LIKE 'LCK/$year%'";
+    }
+  }
+
+  String _slugToLpOverviewPrefix(String slug, int year) {
+    switch (slug) {
+      case 'msi': return 'MSI/$year';
+      case 'worlds': return 'Worlds/$year';
+      case 'first_stand': return 'First Stand/$year';
+      default: return 'LCK/$year';
+    }
+  }
+
+  // Leaguepedia ScoreboardGames + ScoreboardPlayers로 과거 경기 상세 로드
+  Future<MatchDetail?> getLeaguepediaMatchDetail(LckMatch match) async {
+    final t1Code = match.team1.code;
+    final t2Code = match.team2.code;
+    final t1Aliases = _leaguepediaTeamAliases[t1Code] ?? [t1Code];
+    final t2Aliases = _leaguepediaTeamAliases[t2Code] ?? [t2Code];
+
+    final cacheKey = 'lpdetail_${match.id}';
+    final hit = _cache[cacheKey];
+    if (hit != null && DateTime.now().millisecondsSinceEpoch - hit.ts < _cacheTtlMs) {
+      if (hit.body.isEmpty) return null;
+      final cached = jsonDecode(hit.body) as Map<String, dynamic>;
+      return _buildLpMatchDetail(
+        cached['games'] as List, cached['players'] as List,
+        t1Aliases, t2Aliases, t1Code, t2Code,
+      );
+    }
+
+    final dateUtc = match.startTime.toUtc();
+    final d0 = dateUtc.subtract(const Duration(days: 1)).toIso8601String().substring(0, 10);
+    final d1 = dateUtc.add(const Duration(days: 2)).toIso8601String().substring(0, 10);
+    final year = match.startTime.year;
+
+    final overviewPage = _extractOverviewPage(match.id);
+    final pageFilter = overviewPage != null
+        ? "_pageName LIKE '${overviewPage.replaceAll("'", "\\'")}%'"
+        : _slugToLpPageFilter(match.leagueSlug, year);
+
+    final playerOvPage = overviewPage ??
+        '${_slugToLpOverviewPrefix(match.leagueSlug, year)}/';
+    final playerFilter = overviewPage != null
+        ? "OverviewPage='${overviewPage.replaceAll("'", "\\'")}'"
+        : "OverviewPage LIKE '$playerOvPage%'";
+
+    final allT1 = t1Aliases.map((a) => "Team='${a.replaceAll("'", "\\'")}'").join(' OR ');
+    final allT2 = t2Aliases.map((a) => "Team='${a.replaceAll("'", "\\'")}'").join(' OR ');
+
+    const lpHeaders = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'};
+
+    try {
+      final gamesUri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'ScoreboardGames',
+        'fields': 'N,Team1,Team2,WinTeam,Team1Kills,Team2Kills,Team1Gold,Team2Gold,'
+            'Team1Towers,Team2Towers,Team1Barons,Team2Barons,Team1Dragons,Team2Dragons,'
+            'Team1Elders,Team2Elders,Team1RiftHeralds,Team2RiftHeralds,'
+            'Team1VoidGrubs,Team2VoidGrubs,Team1Bans,Team2Bans,Gamelength',
+        'where': "($pageFilter) AND DateTime_UTC > '$d0' AND DateTime_UTC < '$d1'",
+        'order_by': 'N ASC',
+        'format': 'json',
+        'limit': '10',
+      });
+
+      final playersUri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'ScoreboardPlayers',
+        'fields': 'N,Team,Champion,Kills,Deaths,Assists',
+        'where': "$playerFilter AND (($allT1) OR ($allT2))",
+        'order_by': 'N ASC',
+        'format': 'json',
+        'limit': '100',
+      });
+
+      final results = await Future.wait([
+        http.get(gamesUri, headers: lpHeaders).timeout(const Duration(seconds: 15)),
+        http.get(playersUri, headers: lpHeaders).timeout(const Duration(seconds: 15)),
+      ]);
+
+      final gamesRes = results[0];
+      final playersRes = results[1];
+
+      if (gamesRes.statusCode != 200 || gamesRes.body.isEmpty) {
+        _cache[cacheKey] = (body: '', ts: DateTime.now().millisecondsSinceEpoch);
+        return null;
+      }
+
+      final gamesData = jsonDecode(gamesRes.body) as List;
+      final playersData = (playersRes.statusCode == 200 && playersRes.body.isNotEmpty)
+          ? jsonDecode(playersRes.body) as List
+          : <dynamic>[];
+
+      debugPrint('[LP] detail games=${gamesData.length} players=${playersData.length}');
+      _cache[cacheKey] = (
+        body: jsonEncode({'games': gamesData, 'players': playersData}),
+        ts: DateTime.now().millisecondsSinceEpoch,
+      );
+
+      return _buildLpMatchDetail(gamesData, playersData, t1Aliases, t2Aliases, t1Code, t2Code);
+    } catch (e) {
+      debugPrint('[LP] getLeaguepediaMatchDetail error: $e');
+      return null;
+    }
+  }
+
+  MatchDetail? _buildLpMatchDetail(
+    List gamesData,
+    List playersData,
+    List<String> t1Aliases,
+    List<String> t2Aliases,
+    String t1Code,
+    String t2Code,
+  ) {
+    // 1. ScoreboardGames에서 해당 매치만 필터
+    final matched = <Map<String, dynamic>>[];
+    for (final r in gamesData) {
+      final row = r as Map<String, dynamic>;
+      final rt1 = row['Team1']?.toString().trim() ?? '';
+      final rt2 = row['Team2']?.toString().trim() ?? '';
+      final fwd = t1Aliases.contains(rt1) && t2Aliases.contains(rt2);
+      final rev = t2Aliases.contains(rt1) && t1Aliases.contains(rt2);
+      if (!fwd && !rev) continue;
+      matched.add({...row, '_fwd': fwd});
+    }
+    if (matched.isEmpty) return null;
+    matched.sort((a, b) => (a['N'] as int? ?? 0).compareTo(b['N'] as int? ?? 0));
+
+    // 2. ScoreboardPlayers → 게임별 픽/어시스트 집계
+    final gameNs = {for (final g in matched) g['N'] as int? ?? 0};
+    final picks = <int, Map<String, List<String>>>{};
+    final teamAssists = <int, Map<String, int>>{};
+
+    for (final r in playersData) {
+      final row = r as Map<String, dynamic>;
+      final n = int.tryParse(row['N']?.toString() ?? '') ?? 0;
+      if (!gameNs.contains(n)) continue;
+      final team = row['Team']?.toString().trim() ?? '';
+      final champ = row['Champion']?.toString().trim() ?? '';
+      final isT1 = t1Aliases.contains(team);
+      final isT2 = t2Aliases.contains(team);
+      if (!isT1 && !isT2) continue;
+      final side = isT1 ? 't1' : 't2';
+      picks.putIfAbsent(n, () => {'t1': [], 't2': []});
+      if (champ.isNotEmpty) picks[n]![side]!.add(_toDDragonId(champ));
+      final ast = int.tryParse(row['Assists']?.toString() ?? '') ?? 0;
+      teamAssists.putIfAbsent(n, () => {'t1': 0, 't2': 0});
+      teamAssists[n]![side] = (teamAssists[n]![side] ?? 0) + ast;
+    }
+
+    // 3. GameDetail 리스트 구성
+    List<String> makeDragons(int count, int elders) => [
+      ...List.filled(count, 'mountain'),
+      ...List.filled(elders, 'elder'),
+    ];
+
+    List<String> parseBans(dynamic raw) {
+      if (raw is String && raw.isNotEmpty) {
+        return raw.split(',').map((e) => _toDDragonId(e.trim())).where((e) => e.isNotEmpty).toList();
+      }
+      return [];
+    }
+
+    final games = <GameDetail>[];
+    for (final row in matched) {
+      int lpInt(String k) => (row[k] as num?)?.toInt() ?? 0;
+      final n = row['N'] as int? ?? (games.length + 1);
+      final fwd = row['_fwd'] as bool;
+
+      final winTeam = row['WinTeam']?.toString().trim() ?? '';
+      String? winner;
+      if (t1Aliases.contains(winTeam)) winner = t1Code;
+      else if (t2Aliases.contains(winTeam)) winner = t2Code;
+      else if (winTeam.isNotEmpty) winner = _lpNameToCode[winTeam];
+
+      int? duration;
+      final gl = row['Gamelength']?.toString() ?? '';
+      if (gl.contains(':')) {
+        final p = gl.split(':');
+        if (p.length == 2) duration = (int.tryParse(p[0]) ?? 0) * 60 + (int.tryParse(p[1]) ?? 0);
+      } else {
+        duration = int.tryParse(gl);
+      }
+
+      final t1k = lpInt(fwd ? 'Team1Kills' : 'Team2Kills');
+      final t2k = lpInt(fwd ? 'Team2Kills' : 'Team1Kills');
+      final gPicks = picks[n];
+      final gAst = teamAssists[n];
+
+      final stats1 = GameTeamStats(
+        kills: t1k,
+        deaths: t2k,
+        assists: gAst?['t1'] ?? 0,
+        gold: lpInt(fwd ? 'Team1Gold' : 'Team2Gold'),
+        towers: lpInt(fwd ? 'Team1Towers' : 'Team2Towers'),
+        barons: lpInt(fwd ? 'Team1Barons' : 'Team2Barons'),
+        inhibitors: 0,
+        heralds: lpInt(fwd ? 'Team1RiftHeralds' : 'Team2RiftHeralds'),
+        voidGrubs: lpInt(fwd ? 'Team1VoidGrubs' : 'Team2VoidGrubs'),
+        dragonTypes: makeDragons(
+          lpInt(fwd ? 'Team1Dragons' : 'Team2Dragons'),
+          lpInt(fwd ? 'Team1Elders' : 'Team2Elders'),
+        ),
+        picks: gPicks?['t1'] ?? [],
+      );
+      final stats2 = GameTeamStats(
+        kills: t2k,
+        deaths: t1k,
+        assists: gAst?['t2'] ?? 0,
+        gold: lpInt(fwd ? 'Team2Gold' : 'Team1Gold'),
+        towers: lpInt(fwd ? 'Team2Towers' : 'Team1Towers'),
+        barons: lpInt(fwd ? 'Team2Barons' : 'Team1Barons'),
+        inhibitors: 0,
+        heralds: lpInt(fwd ? 'Team2RiftHeralds' : 'Team1RiftHeralds'),
+        voidGrubs: lpInt(fwd ? 'Team2VoidGrubs' : 'Team1VoidGrubs'),
+        dragonTypes: makeDragons(
+          lpInt(fwd ? 'Team2Dragons' : 'Team1Dragons'),
+          lpInt(fwd ? 'Team2Elders' : 'Team1Elders'),
+        ),
+        picks: gPicks?['t2'] ?? [],
+      );
+
+      games.add(GameDetail(
+        number: n,
+        winnerCode: winner,
+        team1IsBlue: true,
+        durationSeconds: duration,
+        team1Stats: stats1,
+        team2Stats: stats2,
+        team1Bans: parseBans(row[fwd ? 'Team1Bans' : 'Team2Bans']),
+        team2Bans: parseBans(row[fwd ? 'Team2Bans' : 'Team1Bans']),
+      ));
+    }
+
+    if (games.isEmpty) return null;
+    return MatchDetail(games: games, team1Code: t1Code);
   }
 
   Future<List<LckMatch>> getLiveMatches() async {

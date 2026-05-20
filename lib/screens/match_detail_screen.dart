@@ -40,6 +40,14 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   }
 
   Future<void> _loadDetail() async {
+    if (widget.match.id.startsWith('lp_')) {
+      try {
+        final detail = await LckApiService.instance.getLeaguepediaMatchDetail(widget.match);
+        if (!mounted) return;
+        if (detail != null) setState(() => _detail = detail);
+      } catch (_) {}
+      return;
+    }
     try {
       var detail = await LckApiService.instance.getEventDetails(widget.match.id);
       detail = await LckApiService.instance.enrichWithWindowData(detail, widget.match);
@@ -104,7 +112,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
               const _LiveBanner(),
             ] else ...[
               // 세트별 결과
-              if (_detail != null) _GameByGameCard(match: match, detail: _detail!),
+              if (_detail != null)
+                _GameByGameCard(match: match, detail: _detail!),
             ],
           ],
         ),
@@ -775,8 +784,14 @@ class _GameSetView extends StatelessWidget {
     final t1 = tL; final t2 = tR;
     final isT1Win = game.winnerCode == tL.code;
     final isT2Win = game.winnerCode == tR.code;
-    final c1 = teamColor(tL.code);
-    final c2 = teamColor(tR.code);
+    // 팀 색상 미등록(해외팀)이면 진영 색 사용: 왼쪽=블루, 오른쪽=레드
+    const _unknownColor = Color(0xFF64748B);
+    const _blueColor = Color(0xFF2563EB);
+    const _redColor  = Color(0xFFDC2626);
+    final c1Raw = teamColor(tL.code);
+    final c2Raw = teamColor(tR.code);
+    final c1 = c1Raw == _unknownColor ? _blueColor : c1Raw;
+    final c2 = c2Raw == _unknownColor ? _redColor  : c2Raw;
     final s1 = sL;
     final s2 = sR;
     final hasStats = s1 != null && s2 != null;
@@ -809,7 +824,11 @@ class _GameSetView extends StatelessWidget {
                 ),
               ),
               if (hasStats) ...[
-                Text('${s1.kills}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 26, color: isT1Win ? c1 : AppColors.textHigh)),
+                SizedBox(
+                  width: 36,
+                  child: Text('${s1.kills}', textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 26, color: isT1Win ? c1 : AppColors.textHigh)),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Column(
@@ -821,7 +840,11 @@ class _GameSetView extends StatelessWidget {
                     ],
                   ),
                 ),
-                Text('${s2.kills}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 26, color: isT2Win ? c2 : AppColors.textHigh)),
+                SizedBox(
+                  width: 36,
+                  child: Text('${s2.kills}', textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 26, color: isT2Win ? c2 : AppColors.textHigh)),
+                ),
               ] else if (game.winnerCode != null) ...[
                 Text(game.winnerCode!, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: teamColor(game.winnerCode!))),
               ] else ...[

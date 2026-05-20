@@ -7,11 +7,33 @@ import '../utils/team_utils.dart';
 
 String _formatBlockName(String raw) {
   final lower = raw.toLowerCase();
+  if (lower.contains('grand final')) return '결승전';
+  if (lower.contains('upper bracket')) {
+    if (lower.contains('final')) return '승자조 결승';
+    final m = RegExp(r'round\s*(\d+)', caseSensitive: false).firstMatch(raw);
+    return m != null ? '승자조 ${m.group(1)}R' : '승자조';
+  }
+  if (lower.contains('lower bracket')) {
+    if (lower.contains('final')) return '패자조 결승';
+    final m = RegExp(r'round\s*(\d+)', caseSensitive: false).firstMatch(raw);
+    return m != null ? '패자조 ${m.group(1)}R' : '패자조';
+  }
   if (lower.contains('playoff') || lower.contains('플레이오프')) return '플레이오프';
   if (lower.contains('semifinal') || lower.contains('준결승')) return '준결승';
   if (lower.contains('quarterfinal') || lower.contains('8강')) return '8강';
   if (lower.contains('final') || lower.contains('결승')) return '결승';
   if (lower.contains('play-in') || lower.contains('플레이인')) return '플레이인';
+  if (lower.contains('group a') || lower.contains('그룹 a')) return '그룹 A';
+  if (lower.contains('group b') || lower.contains('그룹 b')) return '그룹 B';
+  if (lower.contains('group c') || lower.contains('그룹 c')) return '그룹 C';
+  if (lower.contains('group d') || lower.contains('그룹 d')) return '그룹 D';
+  if (lower.contains('group') || lower.contains('그룹')) return '그룹';
+  if (lower.contains('regular') || lower.contains('정규')) return '정규';
+  // OverviewPage 전체 경로 (예: LCK/2025 Season/Split 2/Playoffs) → 마지막 세그먼트 재귀 처리
+  if (raw.contains('/')) {
+    final lastSeg = raw.split('/').last.trim();
+    if (lastSeg.isNotEmpty && lastSeg != raw) return _formatBlockName(lastSeg);
+  }
   return raw;
 }
 
@@ -37,6 +59,7 @@ class _CardBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      clipBehavior: Clip.hardEdge,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       decoration: BoxDecoration(
         color: const Color(0xFF111528),
@@ -108,7 +131,7 @@ class _CardBody extends StatelessWidget {
     final color = _leagueColor();
     final label = switch (match.leagueSlug) {
       'first_stand' => 'FS',
-      'lck_cup'     => 'Cup',
+      'lck_cup'     => 'CUP',
       'msi'         => 'MSI',
       'worlds'      => 'Worlds',
       _             => match.leagueName,
