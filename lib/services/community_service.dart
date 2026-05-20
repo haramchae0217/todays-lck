@@ -112,8 +112,36 @@ class CommunityService {
   Future<void> deletePost(String postId) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
-    final doc = await _db.collection('posts').doc(postId).get();
+    final postRef = _db.collection('posts').doc(postId);
+    final doc = await postRef.get();
     if (doc.data()?['authorId'] != uid) throw Exception('삭제 권한이 없습니다.');
-    await _db.collection('posts').doc(postId).delete();
+
+    final comments = await postRef.collection('comments').get();
+    final batch = _db.batch();
+    for (final c in comments.docs) {
+      batch.delete(c.reference);
+    }
+    batch.delete(postRef);
+    await batch.commit();
+  }
+
+  Future<void> reportPost(String postId, String reason) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) throw Exception('로그인이 필요합니다.');
+
+    final existing = await _db
+        .collection('reports')
+        .where('postId', isEqualTo: postId)
+        .where('reporterId', isEqualTo: uid)
+        .limit(1)
+        .get();
+    if (existing.docs.isNotEmpty) throw Exception('이미 신고한 게시글입니다.');
+
+    await _db.collection('reports').add({
+      'postId': postId,
+      'reporterId': uid,
+      'reason': reason,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
   }
 }

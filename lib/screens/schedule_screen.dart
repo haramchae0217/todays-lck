@@ -1,22 +1,101 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../constants/colors.dart';
 import '../services/lck_api_service.dart';
-import '../services/prediction_service.dart';
 import '../models/match.dart';
-import '../providers/auth_provider.dart';
 import '../widgets/match_card.dart';
-import '../utils/team_utils.dart';
+import 'match_detail_screen.dart';
 
-const _kAccent = Color(0xFF0891B2);
-const _kLive = Color(0xFFEF4444);
-const _kTextHigh = Color(0xFF0F172A);
-const _kTextMid = Color(0xFF64748B);
-const _kTextLow = Color(0xFF94A3B8);
-const _kBorder = Color(0xFFE2E8F0);
+// ── Notifier: 페이지네이션 상태 관리 ──────────────────────────────────────────
+class ScheduleState {
+  final List<LckMatch> matches;
+  final String? olderToken;
+  final bool loadingMore;
+  const ScheduleState({
+    required this.matches,
+    this.olderToken,
+    this.loadingMore = false,
+  });
+  ScheduleState copyWith({
+    List<LckMatch>? matches,
+    String? olderToken,
+    bool clearOlderToken = false,
+    bool? loadingMore,
+  }) =>
+      ScheduleState(
+        matches: matches ?? this.matches,
+        olderToken: clearOlderToken ? null : (olderToken ?? this.olderToken),
+        loadingMore: loadingMore ?? this.loadingMore,
+      );
+}
 
-final scheduleProvider = FutureProvider<List<LckMatch>>((ref) async {
-  return LckApiService.instance.getSchedule();
+// API 데이터에서 현재 시즌 시작 이전 LCK 경기를 LCK Cup으로 재분류
+List<LckMatch> _reclassifyCup(List<LckMatch> matches) {
+  final cupCutoff = DateTime.utc(DateTime.now().year, 4, 1);
+  return matches.map((m) {
+    if (m.leagueSlug == 'lck' && m.startTime.toUtc().isBefore(cupCutoff)) {
+      return LckMatch(
+        id: m.id, startTime: m.startTime, state: m.state,
+        blockName: m.blockName, team1: m.team1, team2: m.team2,
+        bestOf: m.bestOf, hasVod: m.hasVod,
+        leagueName: 'LCK Cup', leagueSlug: 'lck_cup',
+      );
+    }
+    return m;
+  }).toList();
+}
+
+class ScheduleNotifier extends AsyncNotifier<ScheduleState> {
+  @override
+  Future<ScheduleState> build() async {
+    final r = await LckApiService.instance.getSchedule();
+    var allMatches = r.matches;
+    var olderToken = r.olderToken;
+
+    // 2026 LCK 정규시즌 시작일(4/1)까지 자동 페이지네이션 (최대 5페이지)
+    final seasonStart = DateTime.utc(DateTime.now().year, 4, 1);
+    for (int i = 0; i < 5 && olderToken != null; i++) {
+      final earliest = allMatches.isEmpty
+          ? null
+          : allMatches.map((m) => m.startTime).reduce((a, b) => a.isBefore(b) ? a : b);
+      if (earliest != null && earliest.isBefore(seasonStart)) break;
+      final older = await LckApiService.instance.getSchedule(pageToken: olderToken);
+      if (older.matches.isEmpty) break;
+      allMatches = [...allMatches, ...older.matches];
+      olderToken = older.olderToken;
+    }
+
+    return ScheduleState(matches: _reclassifyCup(allMatches), olderToken: olderToken);
+  }
+
+  Future<void> loadOlder() async {
+    final cur = state.valueOrNull;
+    if (cur == null || cur.olderToken == null || cur.loadingMore) return;
+    state = AsyncData(cur.copyWith(loadingMore: true));
+    try {
+      final r = await LckApiService.instance.getSchedule(pageToken: cur.olderToken);
+      state = AsyncData(ScheduleState(
+        matches: [...cur.matches, ..._reclassifyCup(r.matches)],
+        olderToken: r.olderToken,
+      ));
+    } catch (_) {
+      state = AsyncData(cur.copyWith(loadingMore: false));
+    }
+  }
+
+  Future<void> refresh() async {
+    LckApiService.instance.clearCache('getSchedule');
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() => build());
+  }
+}
+
+final scheduleProvider =
+    AsyncNotifierProvider<ScheduleNotifier, ScheduleState>(ScheduleNotifier.new);
+
+final historicalScheduleProvider = FutureProvider.family<List<LckMatch>, int>((ref, year) {
+  return LckApiService.instance.getLeaguepediaYearSchedule(year);
 });
 
 abstract class _Item {}
@@ -71,8 +150,8 @@ class _LeagueTab {
 }
 
 const _leagueTabs = [
-  _LeagueTab('전체', null),
   _LeagueTab('LCK', 'lck'),
+  _LeagueTab('LCK Cup', 'lck_cup'),
   _LeagueTab('MSI', 'msi'),
   _LeagueTab('Worlds', 'worlds'),
   _LeagueTab('First Stand', 'first_stand'),
@@ -86,11 +165,15 @@ class ScheduleScreen extends ConsumerStatefulWidget {
 }
 
 class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
+  static const _minYear = 2012;
+
   final _scrollController = ScrollController();
   final _targetKey = GlobalKey();
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   String? _selectedSlug;
   bool _scrolledToTarget = false;
+  // Auto-snap: 연도별 첫 진입 시 1회만 실행, 현재 연도는 스킵
+  int? _autoSnapDoneForYear = DateTime.now().year;
 
   @override
   void dispose() {
@@ -117,43 +200,93 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     if (_scrollController.hasClients) _scrollController.jumpTo(0);
   }
 
-  void _showPredictionSheet(BuildContext context, LckMatch match) {
-    final user = ref.read(authStateProvider).valueOrNull;
-    if (!match.isUpcoming && !match.isLive && !match.isCompleted) return;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _PredictionSheet(match: match, isLoggedIn: user != null),
+  void _openMatchDetail(BuildContext context, LckMatch match) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => MatchDetailScreen(match: match)),
     );
   }
 
   List<LckMatch> _filterMatches(List<LckMatch> matches) {
     return matches.where((m) {
       if (m.startTime.year != _selectedMonth.year ||
-          m.startTime.month != _selectedMonth.month) return false;
+          m.startTime.month != _selectedMonth.month) {
+        return false;
+      }
       if (_selectedSlug != null) return m.leagueSlug == _selectedSlug;
       return true;
     }).toList();
   }
 
-  void _changeMonth(int delta, List<DateTime> months) {
-    final idx = months.indexWhere(
-      (m) => m.year == _selectedMonth.year && m.month == _selectedMonth.month,
-    );
-    final next = idx + delta;
-    if (next < 0 || next >= months.length) return;
+  // 필터 선택 + 해당 리그의 가장 최근 달로 이동
+  void _selectLeague(String? slug, List<LckMatch> allMatches) {
+    if (slug == null || slug == _selectedSlug) {
+      setState(() { _selectedSlug = null; _resetScroll(); });
+      return;
+    }
+    DateTime? latest;
+    for (final m in allMatches) {
+      if (m.leagueSlug == slug) {
+        final mm = DateTime(m.startTime.year, m.startTime.month);
+        if (latest == null || mm.isAfter(latest)) latest = mm;
+      }
+    }
     setState(() {
-      _selectedMonth = months[next];
+      _selectedSlug = slug;
+      if (latest != null) _selectedMonth = latest;
+      _resetScroll();
+    });
+  }
+
+  void _changeMonth(int delta) {
+    final now = DateTime.now();
+    final minDate = DateTime(_minYear, 1);
+    final maxDate = DateTime(now.year, now.month);
+
+    var year = _selectedMonth.year;
+    var month = _selectedMonth.month + delta;
+    if (month < 1) { month = 12; year--; }
+    else if (month > 12) { month = 1; year++; }
+
+    final next = DateTime(year, month);
+    if (next.isBefore(minDate) || next.isAfter(maxDate)) return;
+
+    final yearChanged = next.year != _selectedMonth.year;
+    setState(() {
+      _selectedMonth = next;
+      if (yearChanged) _autoSnapDoneForYear = null; // 새 연도엔 snap 허용
       _resetScroll();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final schedule = ref.watch(scheduleProvider);
+    final year = _selectedMonth.year;
+    final isCurrent = year == DateTime.now().year;
+    final schedule2026 = ref.watch(scheduleProvider);
+    final scheduleHist = isCurrent ? null : ref.watch(historicalScheduleProvider(year));
+
+    List<LckMatch> matches = [];
+    bool isLoading = false;
+    Object? error;
+    ScheduleState? state2026;
+
+    if (isCurrent) {
+      schedule2026.when(
+        loading: () { isLoading = true; },
+        error: (e, _) { error = e; },
+        data: (s) {
+          state2026 = s;
+          matches = s.matches;
+        },
+      );
+    } else {
+      scheduleHist!.when(
+        loading: () { isLoading = true; },
+        error: (e, _) { error = e; },
+        data: (list) { matches = list; },
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -163,588 +296,224 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
             icon: const Icon(Icons.refresh),
             onPressed: () {
               _resetScroll();
-              ref.invalidate(scheduleProvider);
+              if (isCurrent) {
+                ref.read(scheduleProvider.notifier).refresh();
+              } else {
+                ref.invalidate(historicalScheduleProvider(year));
+              }
             },
           ),
         ],
       ),
-      body: schedule.when(
-        loading: () => const Center(child: CircularProgressIndicator(color: _kAccent)),
-        error: (e, _) => Center(child: Text('오류: $e')),
-        data: (matches) {
-          if (matches.isEmpty) return const Center(child: Text('경기 일정이 없습니다'));
-
-          final monthSet = <String>{};
-          final availableMonths = <DateTime>[];
-          for (final m in matches) {
-            final key = '${m.startTime.year}-${m.startTime.month}';
-            if (monthSet.add(key)) {
-              availableMonths.add(DateTime(m.startTime.year, m.startTime.month));
-            }
-          }
-          availableMonths.sort((a, b) => a.compareTo(b));
-
-          final hasSelected = availableMonths.any(
-            (m) => m.year == _selectedMonth.year && m.month == _selectedMonth.month,
-          );
-          if (!hasSelected && availableMonths.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              setState(() => _selectedMonth = availableMonths.first);
-            });
-          }
-
-          final selectedIdx = availableMonths.indexWhere(
-            (m) => m.year == _selectedMonth.year && m.month == _selectedMonth.month,
-          );
-          final canGoPrev = selectedIdx > 0;
-          final canGoNext = selectedIdx < availableMonths.length - 1;
-
-          final filtered = _filterMatches(matches);
-          final items = _buildItems(filtered);
-
-          final hasTarget =
-              items.any((e) => e is _DateHeader && (e.isToday || e.isScrollTarget));
-          if (hasTarget) _scrollToTarget();
-
-          return Column(
-            children: [
-              // ── 월 네비게이터 ──
-              Container(
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  border: Border(bottom: BorderSide(color: _kBorder)),
-                ),
-                padding: const EdgeInsets.fromLTRB(0, 6, 0, 0),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        IconButton(
-                          onPressed: canGoPrev
-                              ? () => _changeMonth(-1, availableMonths)
-                              : null,
-                          icon: Icon(
-                            Icons.chevron_left,
-                            color: canGoPrev ? _kTextMid : _kBorder,
-                            size: 26,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          DateFormat('yyyy년 M월', 'ko').format(_selectedMonth),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: _kTextHigh,
-                            letterSpacing: -0.3,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          onPressed: canGoNext
-                              ? () => _changeMonth(1, availableMonths)
-                              : null,
-                          icon: Icon(
-                            Icons.chevron_right,
-                            color: canGoNext ? _kTextMid : _kBorder,
-                            size: 26,
-                          ),
-                        ),
-                      ],
-                    ),
-                    // ── 리그 필터 탭 ──
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-                      child: Row(
-                        children: _leagueTabs.map((tab) {
-                          final isSelected = _selectedSlug == tab.slug;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: GestureDetector(
-                              onTap: () => setState(() {
-                                _selectedSlug = tab.slug;
-                                _resetScroll();
-                              }),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 150),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? _kAccent.withValues(alpha: 0.10)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: isSelected ? _kAccent : _kBorder,
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Text(
-                                  tab.label,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: isSelected
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
-                                    color: isSelected ? _kAccent : _kTextMid,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ── 경기 리스트 ──
-              Expanded(
-                child: filtered.isEmpty
-                    ? const Center(
-                        child: Text(
-                          '이 달 경기 일정이 없습니다',
-                          style: TextStyle(color: _kTextLow),
-                        ),
-                      )
-                    : RefreshIndicator(
-                        color: _kAccent,
-                        onRefresh: () async {
-                          _resetScroll();
-                          return ref.refresh(scheduleProvider.future);
-                        },
-                        child: SingleChildScrollView(
-                          controller: _scrollController,
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.only(bottom: 24),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: items.map((item) {
-                              if (item is _DateHeader) {
-                                final isTarget = item.isToday || item.isScrollTarget;
-                                return _DateHeaderWidget(
-                                  key: isTarget ? _targetKey : null,
-                                  date: item.date,
-                                  isToday: item.isToday,
-                                );
-                              }
-                              final m = (item as _MatchItem).match;
-                              return MatchCard(
-                                match: m,
-                                onTap: () => _showPredictionSheet(context, m),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator(color: AppColors.accent))
+          : error != null
+              ? Center(child: Text('오류: $error'))
+              : _buildContent(matches, context, state2026, isCurrent),
     );
   }
-}
 
-// ── prediction bottom sheet ──────────────────────────────────────────────────
-class _PredictionSheet extends StatefulWidget {
-  final LckMatch match;
-  final bool isLoggedIn;
-  const _PredictionSheet({required this.match, required this.isLoggedIn});
-
-  @override
-  State<_PredictionSheet> createState() => _PredictionSheetState();
-}
-
-class _PredictionSheetState extends State<_PredictionSheet> {
-  String? _submittedPick;
-  String? _myPick;
-  bool _loading = true;
-  bool _submitting = false;
-  ({int team1Count, int team2Count})? _stats;
-
-  bool get _isNew => _submittedPick == null;
-  bool get _hasChanged => _submittedPick != null && _myPick != _submittedPick;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    final match = widget.match;
-    final futures = <Future>[
-      if (widget.isLoggedIn) PredictionService.instance.getMyPrediction(match.id),
-      PredictionService.instance.getMatchStats(
-        matchId: match.id,
-        team1Code: match.team1.code,
-        team2Code: match.team2.code,
-      ),
-    ];
-    final results = await Future.wait(futures);
-    if (!mounted) return;
-    setState(() {
-      if (widget.isLoggedIn) {
-        _submittedPick = results[0] as String?;
-        _myPick = results[0] as String?;
-        _stats = results[1] as ({int team1Count, int team2Count});
-      } else {
-        _stats = results[0] as ({int team1Count, int team2Count});
-      }
-      _loading = false;
-    });
-  }
-
-  void _select(String teamCode) {
-    if (!widget.isLoggedIn || _submitting) return;
-    setState(() => _myPick = teamCode);
-  }
-
-  Future<void> _confirm() async {
-    if (_myPick == null || _submitting) return;
-    setState(() => _submitting = true);
-    try {
-      if (_isNew) {
-        await PredictionService.instance.submitPrediction(
-          match: widget.match,
-          predictedTeamCode: _myPick!,
-        );
-      } else {
-        await PredictionService.instance.updatePrediction(
-          matchId: widget.match.id,
-          newTeamCode: _myPick!,
-        );
-      }
-      if (mounted) {
-        setState(() { _submittedPick = _myPick; _submitting = false; });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_isNew ? '${_myPick!} 예측 완료!' : '${_myPick!}로 변경 완료!'),
-            backgroundColor: _kAccent,
-          ),
-        );
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _submitting = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+  Widget _buildContent(List<LckMatch> matches, BuildContext context, ScheduleState? state2026, bool is2026) {
+    // Auto-snap: 연도 첫 진입 시 1회만 — 해당 달에 경기 없으면 데이터 있는 첫 달로 이동
+    final monthsWithData = <int>{};
+    for (final m in matches) {
+      if (m.startTime.year == _selectedMonth.year) {
+        monthsWithData.add(m.startTime.month);
       }
     }
-  }
+    if (matches.isNotEmpty &&
+        !monthsWithData.contains(_selectedMonth.month) &&
+        _autoSnapDoneForYear != _selectedMonth.year) {
+      final first = monthsWithData.isEmpty ? null : (monthsWithData.toList()..sort()).first;
+      if (first != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _autoSnapDoneForYear = _selectedMonth.year;
+              _selectedMonth = DateTime(_selectedMonth.year, first);
+            });
+          }
+        });
+      }
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    final match = widget.match;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: _kBorder,
-              borderRadius: BorderRadius.circular(2),
-            ),
+    final now = DateTime.now();
+    final canGoPrev = _selectedMonth.isAfter(DateTime(_minYear, 1)) ||
+        (_selectedMonth.year == _minYear && _selectedMonth.month > 1);
+    final canGoNext = _selectedMonth.year < now.year ||
+        (_selectedMonth.year == now.year && _selectedMonth.month < now.month);
+
+    final filtered = _filterMatches(matches);
+    final items = _buildItems(filtered);
+
+    final hasTarget =
+        items.any((e) => e is _DateHeader && (e.isToday || e.isScrollTarget));
+    if (hasTarget) _scrollToTarget();
+
+    return Column(
+      children: [
+        // ── 헤더 (연도 + 월 네비게이터 + 리그 필터) ──
+        Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF0A0E1A),
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
-          const SizedBox(height: 20),
-          Text(
-            match.isCompleted ? '경기 결과' : match.isLive ? '경기 진행 중 🔴' : '승부예측',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: _kTextHigh,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${match.leagueName}  ${match.blockName}',
-            style: const TextStyle(color: _kTextLow, fontSize: 12),
-          ),
-          const SizedBox(height: 24),
-          if (_loading)
-            const CircularProgressIndicator(color: _kAccent)
-          else if (!widget.isLoggedIn)
-            const Text('로그인 후 예측에 참여할 수 있습니다.',
-                style: TextStyle(color: _kTextMid))
-          else if (match.isCompleted)
-            _ResultView(match: match, myPick: _myPick)
-          else if (match.isLive)
-            _LiveView(match: match, myPick: _myPick)
-          else ...[
-            if (_isNew) ...[
-              const Text(
-                '어느 팀이 이길까요?',
-                style: TextStyle(color: _kTextMid, fontSize: 13),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-            ] else
-              const SizedBox(height: 4),
-            Row(
-              children: [
-                Expanded(child: _TeamSelectButton(
-                  team: match.team1,
-                  selected: _myPick == match.team1.code,
-                  isConfirmed: _submittedPick == match.team1.code,
-                  onTap: () => _select(match.team1.code),
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: _TeamSelectButton(
-                  team: match.team2,
-                  selected: _myPick == match.team2.code,
-                  isConfirmed: _submittedPick == match.team2.code,
-                  onTap: () => _select(match.team2.code),
-                )),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (_isNew || _hasChanged)
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
-                  onPressed: _myPick == null || _submitting ? null : _confirm,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _hasChanged
-                        ? const Color(0xFFD97706)
-                        : _kAccent,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: _kBorder,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.fromLTRB(0, 6, 0, 0),
+          child: Column(
+            children: [
+              // ── 연도 + 월 통합 네비게이터 ──
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    onPressed: canGoPrev ? () => _changeMonth(-1) : null,
+                    icon: Icon(
+                      Icons.chevron_left,
+                      color: canGoPrev ? AppColors.textMid : AppColors.border,
+                      size: 26,
+                    ),
                   ),
-                  child: _submitting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : Text(
-                          _hasChanged ? '변경 확정' : '예측 확정',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 15)),
-                ),
-              )
-            else
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _kAccent.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _kAccent.withValues(alpha: 0.25)),
-                ),
-                child: const Center(
-                  child: Text('✅ 예측 완료  |  다른 팀을 눌러 변경할 수 있어요.',
-                      style: TextStyle(color: _kTextMid, fontSize: 12)),
-                ),
+                  const SizedBox(width: 8),
+                  Text(
+                    DateFormat('yyyy년 M월', 'ko').format(_selectedMonth),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textHigh,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: canGoNext ? () => _changeMonth(1) : null,
+                    icon: Icon(
+                      Icons.chevron_right,
+                      color: canGoNext ? AppColors.textMid : AppColors.border,
+                      size: 26,
+                    ),
+                  ),
+                ],
               ),
-          ],
-          if (!_loading && _stats != null && (_stats!.team1Count + _stats!.team2Count) > 0) ...[
-            const SizedBox(height: 20),
-            _PredictionStatsBar(
-              team1Code: match.team1.code,
-              team2Code: match.team2.code,
-              team1Count: _stats!.team1Count,
-              team2Count: _stats!.team2Count,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TeamSelectButton extends StatelessWidget {
-  final MatchTeam team;
-  final bool selected;
-  final bool isConfirmed;
-  final VoidCallback onTap;
-  const _TeamSelectButton({
-    required this.team,
-    required this.selected,
-    required this.isConfirmed,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Color tc = teamColor(team.code);
-    final Color borderColor = selected ? tc : _kBorder;
-    final Color bgColor = selected ? tc.withValues(alpha: 0.08) : const Color(0xFFF8FAFC);
-    final Color textColor = selected ? tc : _kTextMid;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 22),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: borderColor, width: selected ? 2 : 1),
-        ),
-        child: Column(
-          children: [
-            Text(team.code,
-                style: TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 24, color: textColor)),
-            if (selected) ...[
-              const SizedBox(height: 8),
-              Icon(
-                isConfirmed ? Icons.check_circle : Icons.radio_button_checked,
-                color: tc,
-                size: 18,
+              // ── 리그 필터 탭 ──
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+                child: Row(
+                  children: _leagueTabs.map((tab) {
+                    final isSelected = _selectedSlug == tab.slug;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: GestureDetector(
+                        onTap: () => _selectLeague(isSelected ? null : tab.slug, matches),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppColors.accent.withValues(alpha: 0.15)
+                                : const Color(0xFF111528),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isSelected ? AppColors.accent : AppColors.border,
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            tab.label,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: isSelected ? AppColors.accent : AppColors.textMid,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
               ),
             ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ResultView extends StatelessWidget {
-  final LckMatch match;
-  final String? myPick;
-  const _ResultView({required this.match, this.myPick});
-
-  @override
-  Widget build(BuildContext context) {
-    final winner = match.team1.outcome == 'win' ? match.team1.code : match.team2.code;
-    final correct = myPick != null && myPick == winner;
-    return Column(
-      children: [
-        Text('${match.team1.gameWins} : ${match.team2.gameWins}',
-            style: const TextStyle(
-                fontSize: 32, fontWeight: FontWeight.bold, color: _kTextHigh, letterSpacing: 4)),
-        const SizedBox(height: 4),
-        Text('${match.team1.code} vs ${match.team2.code}',
-            style: const TextStyle(color: _kTextLow, fontSize: 13)),
-        if (myPick != null) ...[
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            decoration: BoxDecoration(
-              color: correct
-                  ? const Color(0xFF059669).withValues(alpha: 0.08)
-                  : const Color(0xFFEF4444).withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: correct
-                    ? const Color(0xFF059669).withValues(alpha: 0.3)
-                    : const Color(0xFFEF4444).withValues(alpha: 0.3),
-              ),
-            ),
-            child: Text(
-              correct ? '✅ 적중! ($myPick)' : '❌ 불일치 (예측: $myPick / 실제: $winner)',
-              style: TextStyle(
-                  color: correct ? const Color(0xFF059669) : const Color(0xFFEF4444),
-                  fontWeight: FontWeight.bold),
-            ),
           ),
-        ],
-      ],
-    );
-  }
-}
-
-class _LiveView extends StatelessWidget {
-  final LckMatch match;
-  final String? myPick;
-  const _LiveView({required this.match, this.myPick});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const Text('🔴 경기가 진행 중입니다',
-            style: TextStyle(color: _kLive, fontWeight: FontWeight.w600)),
-        if (myPick != null) ...[
-          const SizedBox(height: 12),
-          Text('예측: $myPick', style: const TextStyle(color: _kTextMid)),
-        ],
-      ],
-    );
-  }
-}
-
-// ── 예측 통계 바 ──────────────────────────────────────────────────────────────
-class _PredictionStatsBar extends StatelessWidget {
-  final String team1Code;
-  final String team2Code;
-  final int team1Count;
-  final int team2Count;
-
-  const _PredictionStatsBar({
-    required this.team1Code,
-    required this.team2Code,
-    required this.team1Count,
-    required this.team2Count,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final total = team1Count + team2Count;
-    final t1Pct = total > 0 ? (team1Count / total) : 0.5;
-    final t2Pct = 1.0 - t1Pct;
-    final c1 = teamColor(team1Code);
-    final c2 = teamColor(team2Code);
-
-    return Column(
-      children: [
-        Row(
-          children: [
-            Text(
-              team1Code,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: c1),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              '${(t1Pct * 100).round()}%',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: c1),
-            ),
-            const Spacer(),
-            Text(
-              '총 $total명 참여',
-              style: const TextStyle(fontSize: 11, color: _kTextLow),
-            ),
-            const Spacer(),
-            Text(
-              '${(t2Pct * 100).round()}%',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: c2),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              team2Code,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: c2),
-            ),
-          ],
         ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: SizedBox(
-            height: 10,
-            child: Row(
-              children: [
-                if (t1Pct > 0)
-                  Expanded(
-                    flex: (t1Pct * 100).round(),
-                    child: Container(color: c1),
+        // ── 경기 리스트 ──
+        Expanded(
+          child: filtered.isEmpty
+              ? const Center(
+                  child: Text(
+                    '이 달 경기 일정이 없습니다',
+                    style: TextStyle(color: AppColors.textLow),
                   ),
-                if (t2Pct > 0)
-                  Expanded(
-                    flex: (t2Pct * 100).round(),
-                    child: Container(color: c2),
+                )
+              : RefreshIndicator(
+                  color: AppColors.accent,
+                  onRefresh: () async {
+                    _resetScroll();
+                    if (is2026) {
+                      await ref.read(scheduleProvider.notifier).refresh();
+                    } else {
+                      ref.invalidate(historicalScheduleProvider(_selectedMonth.year));
+                    }
+                  },
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ...items.map((item) {
+                          if (item is _DateHeader) {
+                            final isTarget = item.isToday || item.isScrollTarget;
+                            return _DateHeaderWidget(
+                              key: isTarget ? _targetKey : null,
+                              date: item.date,
+                              isToday: item.isToday,
+                            );
+                          }
+                          final m = (item as _MatchItem).match;
+                          return MatchCard(
+                            match: m,
+                            onTap: () => _openMatchDetail(context, m),
+                          );
+                        }),
+                        // ── 이전 기간 더 보기 (2026년만) ──
+                        if (is2026 && state2026?.olderToken != null)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: OutlinedButton.icon(
+                              onPressed: state2026!.loadingMore
+                                  ? null
+                                  : () => ref
+                                      .read(scheduleProvider.notifier)
+                                      .loadOlder(),
+                              icon: state2026.loadingMore
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: AppColors.textMid))
+                                  : const Icon(Icons.history,
+                                      size: 16, color: AppColors.textMid),
+                              label: Text(
+                                state2026.loadingMore ? '불러오는 중...' : '이전 경기 더 보기',
+                                style: const TextStyle(
+                                    color: AppColors.textMid, fontSize: 13),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: AppColors.border),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-              ],
-            ),
-          ),
+                ),
         ),
       ],
     );
@@ -769,7 +538,7 @@ class _DateHeaderWidget extends StatelessWidget {
               height: 14,
               margin: const EdgeInsets.only(right: 8),
               decoration: BoxDecoration(
-                color: _kAccent,
+                color: AppColors.accent,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -778,7 +547,7 @@ class _DateHeaderWidget extends StatelessWidget {
             style: TextStyle(
               fontSize: 13,
               fontWeight: isToday ? FontWeight.bold : FontWeight.w500,
-              color: isToday ? _kAccent : _kTextLow,
+              color: isToday ? AppColors.accent : AppColors.textLow,
             ),
           ),
           if (isToday) ...[
@@ -786,7 +555,7 @@ class _DateHeaderWidget extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
               decoration: BoxDecoration(
-                color: _kAccent,
+                color: AppColors.accent,
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Text(

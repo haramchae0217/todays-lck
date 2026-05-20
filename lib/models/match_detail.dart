@@ -87,6 +87,7 @@ class GameDetail {
   final List<String> team2Bans;
   final DateTime? firstFrameTime; // UTC timestamp of first game frame
   final DateTime? chapterStartUtc; // VOD chapter start = broadcastStart + startMillis
+  final DateTime? gameStartUtc; // actual in-game start (computed from window API)
 
   const GameDetail({
     required this.number,
@@ -102,6 +103,7 @@ class GameDetail {
     this.team2Bans = const [],
     this.firstFrameTime,
     this.chapterStartUtc,
+    this.gameStartUtc,
   });
 
   GameDetail withWindowData({
@@ -111,6 +113,7 @@ class GameDetail {
     int? durationSeconds,
     String? patchVersion,
     bool? team1IsBlue,
+    DateTime? gameStartUtc,
   }) =>
       GameDetail(
         number: number,
@@ -126,6 +129,7 @@ class GameDetail {
         team2Bans: team2Bans,
         firstFrameTime: firstFrameTime,
         chapterStartUtc: chapterStartUtc,
+        gameStartUtc: gameStartUtc ?? this.gameStartUtc,
       );
 
   GameDetail withBans({
@@ -146,6 +150,7 @@ class GameDetail {
         team2Bans: team2Bans,
         firstFrameTime: firstFrameTime,
         chapterStartUtc: chapterStartUtc,
+        gameStartUtc: gameStartUtc,
       );
 }
 

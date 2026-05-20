@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../constants/colors.dart';
 import '../models/app_user.dart';
 import '../models/team.dart';
 import '../providers/auth_provider.dart';
 import '../services/lck_api_service.dart';
 import '../services/notification_service.dart';
 import 'schedule_screen.dart' show scheduleProvider;
-
-const _kAccent = Color(0xFF0891B2);
-const _kTextHigh = Color(0xFF0F172A);
-const _kTextMid = Color(0xFF64748B);
-const _kTextLow = Color(0xFF94A3B8);
-const _kBorder = Color(0xFFE2E8F0);
 
 final _teamsForProfileProvider = FutureProvider<List<Team>>((ref) {
   return LckApiService.instance.getLckTeams();
@@ -31,37 +26,10 @@ class ProfileScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('MY', style: TextStyle(fontWeight: FontWeight.bold)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, size: 20),
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('로그아웃'),
-                  content: const Text('로그아웃 하시겠어요?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('취소'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('로그아웃',
-                          style: TextStyle(color: Color(0xFFEF4444))),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm == true) {
-                await ref.read(authServiceProvider).signOut();
-              }
-            },
-          ),
-        ],
+        actions: const [],
       ),
       body: userAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator(color: _kAccent)),
+        loading: () => const Center(child: CircularProgressIndicator(color: AppColors.accent)),
         error: (e, _) => Center(child: Text('오류: $e')),
         data: (user) {
           if (user == null) return const Center(child: Text('유저 정보 없음'));
@@ -71,7 +39,7 @@ class ProfileScreen extends ConsumerWidget {
               _ProfileHeader(
                 user: user,
                 onEdit: () => _showEditSheet(context, ref, user),
-                onDelete: () => _confirmDelete(context, ref, user),
+                onLogout: () => _confirmLogout(context, ref),
               ),
             ],
           );
@@ -84,12 +52,42 @@ class ProfileScreen extends ConsumerWidget {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFF111528),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _EditProfileSheet(user: user, ref: ref),
+      builder: (_) => _EditProfileSheet(
+        user: user,
+        onDelete: () {
+          Navigator.pop(context);
+          _confirmDelete(context, ref, user);
+        },
+      ),
     );
+  }
+
+  Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('로그아웃'),
+        content: const Text('로그아웃 하시겠어요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('로그아웃',
+                style: TextStyle(color: Color(0xFFEF4444))),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await ref.read(authServiceProvider).signOut();
+    }
   }
 
   Future<void> _confirmDelete(
@@ -129,9 +127,9 @@ class ProfileScreen extends ConsumerWidget {
 class _ProfileHeader extends ConsumerWidget {
   final AppUser user;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback onLogout;
   const _ProfileHeader(
-      {required this.user, required this.onEdit, required this.onDelete});
+      {required this.user, required this.onEdit, required this.onLogout});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -144,9 +142,9 @@ class _ProfileHeader extends ConsumerWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFF111528),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
@@ -168,24 +166,23 @@ class _ProfileHeader extends ConsumerWidget {
                   style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: _kTextHigh),
+                      color: AppColors.textHigh),
                 ),
                 const SizedBox(height: 4),
                 Text(user.email,
-                    style: const TextStyle(color: _kTextMid, fontSize: 13)),
+                    style: const TextStyle(color: AppColors.textMid, fontSize: 13)),
               ],
             ),
           ),
           IconButton(
             onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined, size: 20, color: _kTextMid),
+            icon: const Icon(Icons.edit_outlined, size: 20, color: AppColors.textMid),
             tooltip: '프로필 편집',
           ),
           IconButton(
-            onPressed: onDelete,
-            icon: const Icon(Icons.person_remove_outlined,
-                size: 20, color: Color(0xFFEF4444)),
-            tooltip: '회원 탈퇴',
+            onPressed: onLogout,
+            icon: const Icon(Icons.logout, size: 20, color: AppColors.textMid),
+            tooltip: '로그아웃',
           ),
         ],
       ),
@@ -206,9 +203,9 @@ class _Avatar extends ConsumerWidget {
           favoriteTeam!.imageUrl,
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) =>
-              const Icon(Icons.shield, color: _kAccent),
+              const Icon(Icons.shield, color: AppColors.accent),
         ),
-        borderColor: _kAccent,
+        borderColor: AppColors.accent,
       );
     }
     if (user.photoUrl.isNotEmpty) {
@@ -222,16 +219,16 @@ class _Avatar extends ConsumerWidget {
           lckImage,
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) =>
-              const Icon(Icons.sports_esports, color: _kTextMid),
+              const Icon(Icons.sports_esports, color: AppColors.textMid),
         ),
-        borderColor: _kBorder,
+        borderColor: AppColors.border,
         bgOpacity: 0.5,
       );
     }
     return CircleAvatar(
       radius: 32,
-      backgroundColor: _kAccent.withValues(alpha: 0.10),
-      child: const Icon(Icons.sports_esports, size: 30, color: _kTextMid),
+      backgroundColor: AppColors.accent.withValues(alpha: 0.10),
+      child: const Icon(Icons.sports_esports, size: 30, color: AppColors.textMid),
     );
   }
 
@@ -257,8 +254,8 @@ class _Avatar extends ConsumerWidget {
 // ── 프로필 편집 바텀시트 ──────────────────────────────────────────────────────
 class _EditProfileSheet extends ConsumerStatefulWidget {
   final AppUser user;
-  final WidgetRef ref;
-  const _EditProfileSheet({required this.user, required this.ref});
+  final VoidCallback onDelete;
+  const _EditProfileSheet({required this.user, required this.onDelete});
 
   @override
   ConsumerState<_EditProfileSheet> createState() => _EditProfileSheetState();
@@ -306,7 +303,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             TextButton(
               onPressed: () => Navigator.pop(context, true),
               child: const Text('변경',
-                  style: TextStyle(color: _kAccent)),
+                  style: TextStyle(color: AppColors.accent)),
             ),
           ],
         ),
@@ -318,7 +315,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     try {
       final clearTeam =
           _selectedTeamCode == null && widget.user.favoriteTeamCode != null;
-      await widget.ref.read(authServiceProvider).updateProfile(
+      await ref.read(authServiceProvider).updateProfile(
             widget.user.uid,
             displayName: nameChanged ? name : null,
             favoriteTeamCode: _selectedTeamCode,
@@ -329,7 +326,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
       if (teamChanged && _selectedTeamCode != null) {
         await NotificationService.instance.requestPermission();
         final matches =
-            widget.ref.read(scheduleProvider).valueOrNull ?? [];
+            ref.read(scheduleProvider).valueOrNull?.matches ?? [];
         await NotificationService.instance
             .scheduleTeamNotifications(matches, _selectedTeamCode);
       } else if (teamChanged && _selectedTeamCode == null) {
@@ -357,7 +354,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child:
-                const Text('확인', style: TextStyle(color: _kAccent)),
+                const Text('확인', style: TextStyle(color: AppColors.accent)),
           ),
         ],
       ),
@@ -383,24 +380,38 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: _kBorder,
+                color: AppColors.border,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
           ),
           const SizedBox(height: 20),
-          const Text('프로필 편집',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: _kTextHigh)),
+          Row(
+            children: [
+              const Text('프로필 편집',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textHigh)),
+              const Spacer(),
+              GestureDetector(
+                onTap: widget.onDelete,
+                child: const Text(
+                  '회원 탈퇴',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFEF4444)),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 20),
 
           // 닉네임
           Row(
             children: [
               const Text('닉네임',
-                  style: TextStyle(color: _kTextMid, fontSize: 12)),
+                  style: TextStyle(color: AppColors.textMid, fontSize: 12)),
               if (!canChangeName && nextChangeDate != null) ...[
                 const SizedBox(width: 8),
                 Text(
@@ -417,42 +428,42 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             maxLength: 20,
             enabled: canChangeName,
             style: TextStyle(
-              color: canChangeName ? _kTextHigh : _kTextLow,
+              color: canChangeName ? AppColors.textHigh : AppColors.textLow,
               fontSize: 15,
             ),
             decoration: InputDecoration(
               hintText: '닉네임 입력',
-              hintStyle: const TextStyle(color: _kTextLow),
+              hintStyle: const TextStyle(color: AppColors.textLow),
               filled: true,
-              fillColor: const Color(0xFFF8FAFC),
+              fillColor: const Color(0xFF161B30),
               contentPadding: const EdgeInsets.symmetric(
                   horizontal: 14, vertical: 12),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: _kBorder),
+                borderSide: const BorderSide(color: AppColors.border),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: _kBorder),
+                borderSide: const BorderSide(color: AppColors.border),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
                 borderSide:
-                    const BorderSide(color: _kAccent, width: 1.5),
+                    const BorderSide(color: AppColors.accent, width: 1.5),
               ),
               counterStyle:
-                  const TextStyle(color: _kTextLow, fontSize: 11),
+                  const TextStyle(color: AppColors.textLow, fontSize: 11),
             ),
           ),
           const SizedBox(height: 16),
 
           // 응원팀
           const Text('응원팀',
-              style: TextStyle(color: _kTextMid, fontSize: 12)),
+              style: TextStyle(color: AppColors.textMid, fontSize: 12)),
           const SizedBox(height: 10),
           teamsAsync.when(
             loading: () => const Center(
-                child: CircularProgressIndicator(color: _kAccent)),
+                child: CircularProgressIndicator(color: AppColors.accent)),
             error: (e, _) => Text('오류: $e'),
             data: (teams) => GridView.builder(
               shrinkWrap: true,
@@ -478,13 +489,13 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                         padding: const EdgeInsets.all(7),
                         decoration: BoxDecoration(
                           color: isSelected
-                              ? _kAccent.withValues(alpha: 0.10)
-                              : const Color(0xFFF8FAFC),
+                              ? AppColors.accent.withValues(alpha: 0.10)
+                              : const Color(0xFF161B30),
                           borderRadius: BorderRadius.circular(10),
                           border: isSelected
                               ? Border.all(
-                                  color: _kAccent, width: 1.5)
-                              : Border.all(color: _kBorder),
+                                  color: AppColors.accent, width: 1.5)
+                              : Border.all(color: AppColors.border),
                         ),
                         child: Image.network(
                           team.imageUrl,
@@ -504,7 +515,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                               ? FontWeight.bold
                               : FontWeight.normal,
                           color:
-                              isSelected ? _kAccent : _kTextMid,
+                              isSelected ? AppColors.accent : AppColors.textMid,
                         ),
                       ),
                     ],
@@ -520,7 +531,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             child: ElevatedButton(
               onPressed: _saving ? null : _save,
               style: ElevatedButton.styleFrom(
-                backgroundColor: _kAccent,
+                backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
                 padding:
                     const EdgeInsets.symmetric(vertical: 14),

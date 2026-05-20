@@ -1,21 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'schedule_screen.dart';
 import 'standings_screen.dart';
 import 'prediction_screen.dart';
 import 'community_screen.dart';
 import 'profile_screen.dart';
 
-class HomeScreen extends StatefulWidget {
+final homeNavIndexProvider = StateProvider<int>((ref) => 0);
+
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> {
-  int _currentIndex = 0;
-
-  final List<Widget> _screens = const [
+  static const List<Widget> _screens = [
     ScheduleScreen(),
     StandingsScreen(),
     PredictionScreen(),
@@ -24,9 +20,11 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentIndex = ref.watch(homeNavIndexProvider);
+
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: IndexedStack(index: currentIndex, children: _screens),
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -40,8 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           NavigationBar(
-            selectedIndex: _currentIndex,
-            onDestinationSelected: (i) => setState(() => _currentIndex = i),
+            selectedIndex: currentIndex,
+            onDestinationSelected: (i) =>
+                ref.read(homeNavIndexProvider.notifier).state = i,
             labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
             destinations: const [
               NavigationDestination(
@@ -65,9 +64,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: '커뮤니티',
               ),
               NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person),
-                label: 'MY',
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: '설정',
               ),
             ],
           ),

@@ -57,9 +57,12 @@ class LeaderboardEntry {
   final String photoUrl;
   final int correctPredictions;
   final int totalPredictions;
+  final int resolvedPredictions;
 
-  double get accuracy =>
-      totalPredictions > 0 ? correctPredictions / totalPredictions : 0;
+  double get accuracy {
+    final denom = resolvedPredictions > 0 ? resolvedPredictions : totalPredictions;
+    return denom > 0 ? correctPredictions / denom : 0;
+  }
 
   const LeaderboardEntry({
     required this.uid,
@@ -67,6 +70,7 @@ class LeaderboardEntry {
     required this.photoUrl,
     required this.correctPredictions,
     required this.totalPredictions,
+    required this.resolvedPredictions,
   });
 
   factory LeaderboardEntry.fromFirestore(DocumentSnapshot doc) {
@@ -77,6 +81,7 @@ class LeaderboardEntry {
       photoUrl: data['photoUrl'] ?? '',
       correctPredictions: (data['correctPredictions'] ?? 0) as int,
       totalPredictions: (data['totalPredictions'] ?? 0) as int,
+      resolvedPredictions: (data['resolvedPredictions'] ?? 0) as int,
     );
   }
 }

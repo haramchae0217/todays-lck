@@ -3,10 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
 
 const _kAccent = Color(0xFF0891B2);
-const _kTextHigh = Color(0xFF0F172A);
-const _kTextMid = Color(0xFF64748B);
-const _kTextLow = Color(0xFF94A3B8);
-const _kBorder = Color(0xFFE2E8F0);
+const _kTextHigh = Color(0xFFF1F5F9);
+const _kTextMid = Color(0xFF94A3B8);
+const _kTextLow = Color(0xFF475569);
+const _kBorder = Color(0xFF1E293B);
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -50,7 +50,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final authService = ref.read(authServiceProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9),
+      backgroundColor: const Color(0xFF0A0E1A),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -107,7 +107,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         const Icon(Icons.g_mobiledata, size: 24, color: _kTextHigh),
                   ),
                   label: 'Google로 계속하기',
-                  backgroundColor: Colors.white,
+                  backgroundColor: const Color(0xFF161B30),
                   textColor: _kTextHigh,
                   borderColor: _kBorder,
                 ),
@@ -118,8 +118,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   }),
                   icon: const Icon(Icons.apple, size: 22, color: Colors.white),
                   label: 'Apple로 계속하기',
-                  backgroundColor: _kTextHigh,
-                  textColor: Colors.white,
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  textColor: const Color(0xFF0A0E1A),
                 ),
               ],
               const SizedBox(height: 24),
@@ -199,7 +199,7 @@ class _TestTextField extends StatelessWidget {
         hintText: hint,
         hintStyle: const TextStyle(color: _kTextLow),
         filled: true,
-        fillColor: Colors.white,
+        fillColor: const Color(0xFF161B30),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         border: OutlineInputBorder(

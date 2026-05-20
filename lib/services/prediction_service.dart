@@ -96,12 +96,15 @@ class PredictionService {
     final uid = _uid;
     if (uid == null || completedMatches.isEmpty) return;
 
+    // 단일 필드 쿼리 후 Dart 필터 (복합 인덱스 불필요)
     final snap = await _db
         .collection('predictions')
         .where('userId', isEqualTo: uid)
-        .where('isCorrect', isNull: true)
         .get();
-    if (snap.docs.isEmpty) return;
+    final unresolved = snap.docs
+        .where((d) => d.data()['isCorrect'] == null)
+        .toList();
+    if (unresolved.isEmpty) return;
 
     final resultMap = <String, String>{};
     for (final m in completedMatches) {
@@ -113,24 +116,37 @@ class PredictionService {
       if (winner != null) resultMap[m.id] = winner;
     }
 
-    int newCorrect = 0;
     final batch = _db.batch();
-    for (final doc in snap.docs) {
+    bool anyResolved = false;
+    for (final doc in unresolved) {
       final matchId = doc.data()['matchId'] as String;
       final winner = resultMap[matchId];
       if (winner == null) continue;
       final predicted = doc.data()['predictedTeamCode'] as String;
       final correct = predicted == winner;
       batch.update(doc.reference, {'isCorrect': correct, 'actualWinnerCode': winner});
-      if (correct) newCorrect++;
+      anyResolved = true;
     }
-    await batch.commit();
+    if (anyResolved) await batch.commit();
+  }
 
-    if (newCorrect > 0) {
-      await _db.collection('users').doc(uid).update({
-        'correctPredictions': FieldValue.increment(newCorrect),
-      });
-    }
+  // 예측 컬렉션으로부터 users 문서의 적중 통계를 항상 동기화
+  Future<void> syncUserStats() async {
+    final uid = _uid;
+    if (uid == null) return;
+
+    final snap = await _db
+        .collection('predictions')
+        .where('userId', isEqualTo: uid)
+        .get();
+
+    final resolved = snap.docs.where((d) => d.data()['isCorrect'] != null).length;
+    final correct = snap.docs.where((d) => d.data()['isCorrect'] == true).length;
+
+    await _db.collection('users').doc(uid).update({
+      'resolvedPredictions': resolved,
+      'correctPredictions': correct,
+    });
   }
 
   Future<({int team1Count, int team2Count})> getMatchStats({
@@ -151,6 +167,7 @@ class PredictionService {
     return (team1Count: t1, team2Count: t2);
   }
 
+
   Future<List<LeaderboardEntry>> getLeaderboard() async {
     final snap = await _db
         .collection('users')
@@ -168,5 +185,25 @@ class PredictionService {
       return b.accuracy.compareTo(a.accuracy);
     });
     return entries;
+  }
+
+  Stream<List<LeaderboardEntry>> leaderboardStream() {
+    return _db
+        .collection('users')
+        .orderBy('correctPredictions', descending: true)
+        .limit(100)
+        .snapshots()
+        .map((snap) {
+          final entries = snap.docs
+              .map(LeaderboardEntry.fromFirestore)
+              .where((e) => e.totalPredictions > 0)
+              .toList();
+          entries.sort((a, b) {
+            final cmp = b.correctPredictions.compareTo(a.correctPredictions);
+            if (cmp != 0) return cmp;
+            return b.accuracy.compareTo(a.accuracy);
+          });
+          return entries;
+        });
   }
 }

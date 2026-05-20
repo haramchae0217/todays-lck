@@ -1,16 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../constants/colors.dart';
 import '../models/post.dart';
 import '../providers/auth_provider.dart';
 import '../services/community_service.dart';
-
-const _kAccent = Color(0xFF0891B2);
-const _kLike = Color(0xFFEF4444);
-const _kTextHigh = Color(0xFF0F172A);
-const _kTextMid = Color(0xFF64748B);
-const _kTextLow = Color(0xFF94A3B8);
-const _kBorder = Color(0xFFE2E8F0);
 
 final _postsProvider = StreamProvider<List<Post>>((ref) {
   return CommunityService.instance.posts();
@@ -46,8 +40,8 @@ class CommunityScreen extends ConsumerWidget {
           // ── 정렬 탭 ──
           Container(
             decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(bottom: BorderSide(color: _kBorder)),
+              color: Color(0xFF111528),
+              border: Border(bottom: BorderSide(color: AppColors.border)),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -70,13 +64,13 @@ class CommunityScreen extends ConsumerWidget {
           Expanded(
             child: postsAsync.when(
               loading: () =>
-                  const Center(child: CircularProgressIndicator(color: _kAccent)),
+                  const Center(child: CircularProgressIndicator(color: AppColors.accent)),
               error: (e, _) => Center(child: Text('오류: $e')),
               data: (list) {
                 if (list.isEmpty) {
                   return const Center(
                     child: Text('첫 번째 게시글을 작성해보세요!',
-                        style: TextStyle(color: _kTextLow)),
+                        style: TextStyle(color: AppColors.textLow)),
                   );
                 }
                 final sorted = isPopular
@@ -113,10 +107,10 @@ class _SortTab extends StatelessWidget {
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? _kAccent.withValues(alpha: 0.10) : Colors.transparent,
+          color: selected ? AppColors.accent.withValues(alpha: 0.10) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? _kAccent : _kBorder,
+            color: selected ? AppColors.accent : AppColors.border,
           ),
         ),
         child: Text(
@@ -124,7 +118,7 @@ class _SortTab extends StatelessWidget {
           style: TextStyle(
             fontSize: 12,
             fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? _kAccent : _kTextMid,
+            color: selected ? AppColors.accent : AppColors.textMid,
           ),
         ),
       ),
@@ -150,9 +144,9 @@ class _PostTile extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFF111528),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _kBorder),
+          border: Border.all(color: AppColors.border),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.03),
@@ -168,19 +162,19 @@ class _PostTile extends StatelessWidget {
                 style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
-                    color: _kTextHigh),
+                    color: AppColors.textHigh),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis),
             const SizedBox(height: 8),
             Row(
               children: [
                 Text(post.authorName,
-                    style: const TextStyle(color: _kTextMid, fontSize: 11)),
+                    style: const TextStyle(color: AppColors.textMid, fontSize: 11)),
                 const SizedBox(width: 6),
                 if (post.createdAt != null)
                   Text(
                     DateFormat('M.d HH:mm').format(post.createdAt!),
-                    style: const TextStyle(color: _kTextLow, fontSize: 10),
+                    style: const TextStyle(color: AppColors.textLow, fontSize: 10),
                   ),
                 const Spacer(),
                 GestureDetector(
@@ -200,13 +194,13 @@ class _PostTile extends StatelessWidget {
                         Icon(
                           isLiked ? Icons.favorite : Icons.favorite_border,
                           size: 13,
-                          color: isLiked ? _kLike : _kTextLow,
+                          color: isLiked ? AppColors.like : AppColors.textLow,
                         ),
                         const SizedBox(width: 3),
                         Text('${post.likeCount}',
                             style: TextStyle(
                               fontSize: 11,
-                              color: isLiked ? _kLike : _kTextLow,
+                              color: isLiked ? AppColors.like : AppColors.textLow,
                             )),
                       ],
                     ),
@@ -214,10 +208,10 @@ class _PostTile extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 const Icon(Icons.chat_bubble_outline,
-                    size: 13, color: _kTextLow),
+                    size: 13, color: AppColors.textLow),
                 const SizedBox(width: 3),
                 Text('${post.commentCount}',
-                    style: const TextStyle(color: _kTextLow, fontSize: 11)),
+                    style: const TextStyle(color: AppColors.textLow, fontSize: 11)),
               ],
             ),
           ],
@@ -280,14 +274,14 @@ class _WritePostScreenState extends State<WritePostScreen> {
                   width: 20,
                   height: 20,
                   child: CircularProgressIndicator(
-                      strokeWidth: 2, color: _kAccent)),
+                      strokeWidth: 2, color: AppColors.accent)),
             )
           else
             TextButton(
               onPressed: _submit,
               child: const Text('등록',
                   style: TextStyle(
-                      color: _kAccent,
+                      color: AppColors.accent,
                       fontWeight: FontWeight.bold,
                       fontSize: 15)),
             ),
@@ -318,26 +312,26 @@ class _WritePostScreenState extends State<WritePostScreen> {
       expands: expand,
       maxLength: maxLength,
       textAlignVertical: expand ? TextAlignVertical.top : null,
-      style: const TextStyle(color: _kTextHigh, fontSize: 15),
+      style: const TextStyle(color: AppColors.textHigh, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: _kTextLow),
+        hintStyle: const TextStyle(color: AppColors.textLow),
         filled: true,
-        fillColor: const Color(0xFFF8FAFC),
+        fillColor: const Color(0xFF161B30),
         contentPadding: const EdgeInsets.all(16),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: _kBorder),
+          borderSide: const BorderSide(color: AppColors.border),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: _kBorder),
+          borderSide: const BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: _kAccent, width: 1.5),
+          borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
         ),
-        counterStyle: const TextStyle(color: _kTextLow, fontSize: 11),
+        counterStyle: const TextStyle(color: AppColors.textLow, fontSize: 11),
       ),
     );
   }
@@ -362,6 +356,54 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   void dispose() {
     _commentCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _showReportDialog(BuildContext context, String postId) async {
+    String? selected;
+    const reasons = ['스팸', '욕설/혐오', '허위정보', '기타'];
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF111528),
+          title: const Text('게시글 신고', style: TextStyle(color: AppColors.textHigh)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: reasons.map((r) => RadioListTile<String>(
+              value: r,
+              groupValue: selected,
+              activeColor: AppColors.accent,
+              title: Text(r, style: const TextStyle(color: AppColors.textMid, fontSize: 14)),
+              onChanged: (v) => setState(() => selected = v),
+            )).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소', style: TextStyle(color: AppColors.textMid)),
+            ),
+            TextButton(
+              onPressed: selected == null ? null : () => Navigator.pop(ctx, true),
+              child: const Text('신고', style: TextStyle(color: AppColors.live)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok == true && selected != null) {
+      try {
+        await CommunityService.instance.reportPost(postId, selected!);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('신고가 접수되었습니다.')),
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
+    }
   }
 
   Future<void> _addComment() async {
@@ -433,9 +475,16 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     if (ok == true) {
                       await CommunityService.instance
                           .deletePost(widget.post.id);
-                      if (mounted) Navigator.pop(context);
+                      if (!mounted) return;
+                      Navigator.pop(context);
                     }
                   },
+                )
+              else if (widget.myUid != null)
+                IconButton(
+                  icon: const Icon(Icons.flag_outlined, color: AppColors.textMid),
+                  tooltip: '신고',
+                  onPressed: () => _showReportDialog(context, post.id),
                 ),
             ],
           ),
@@ -454,29 +503,29 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                 style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
-                                    color: _kTextHigh)),
+                                    color: AppColors.textHigh)),
                             const SizedBox(height: 8),
                             Row(
                               children: [
                                 Text(post.authorName,
                                     style: const TextStyle(
-                                        color: _kTextMid, fontSize: 12)),
+                                        color: AppColors.textMid, fontSize: 12)),
                                 const Spacer(),
                                 if (post.createdAt != null)
                                   Text(
                                     DateFormat('yyyy.M.d HH:mm')
                                         .format(post.createdAt!),
                                     style: const TextStyle(
-                                        color: _kTextLow, fontSize: 12),
+                                        color: AppColors.textLow, fontSize: 12),
                                   ),
                               ],
                             ),
-                            const Divider(color: _kBorder, height: 24),
+                            const Divider(color: AppColors.border, height: 24),
                             Text(post.content,
                                 style: const TextStyle(
                                     fontSize: 14,
                                     height: 1.7,
-                                    color: _kTextHigh)),
+                                    color: AppColors.textHigh)),
                             const SizedBox(height: 20),
                             Row(
                               children: [
@@ -497,15 +546,15 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                       color: (widget.myUid != null &&
                                               post.likedBy
                                                   .contains(widget.myUid))
-                                          ? _kLike.withValues(alpha: 0.08)
-                                          : const Color(0xFFF8FAFC),
+                                          ? AppColors.like.withValues(alpha: 0.08)
+                                          : const Color(0xFF161B30),
                                       borderRadius: BorderRadius.circular(20),
                                       border: Border.all(
                                         color: (widget.myUid != null &&
                                                 post.likedBy
                                                     .contains(widget.myUid))
-                                            ? _kLike.withValues(alpha: 0.4)
-                                            : _kBorder,
+                                            ? AppColors.like.withValues(alpha: 0.4)
+                                            : AppColors.border,
                                       ),
                                     ),
                                     child: Row(
@@ -521,8 +570,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                           color: (widget.myUid != null &&
                                                   post.likedBy
                                                       .contains(widget.myUid))
-                                              ? _kLike
-                                              : _kTextLow,
+                                              ? AppColors.like
+                                              : AppColors.textLow,
                                         ),
                                         const SizedBox(width: 5),
                                         Text(
@@ -532,8 +581,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                             color: (widget.myUid != null &&
                                                     post.likedBy.contains(
                                                         widget.myUid))
-                                                ? _kLike
-                                                : _kTextLow,
+                                                ? AppColors.like
+                                                : AppColors.textLow,
                                           ),
                                         ),
                                       ],
@@ -542,14 +591,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                                 ),
                                 const SizedBox(width: 12),
                                 const Icon(Icons.chat_bubble_outline,
-                                    size: 14, color: _kTextLow),
+                                    size: 14, color: AppColors.textLow),
                                 const SizedBox(width: 6),
                                 Text('댓글 ${post.commentCount}',
                                     style: const TextStyle(
-                                        color: _kTextMid, fontSize: 13)),
+                                        color: AppColors.textMid, fontSize: 13)),
                               ],
                             ),
-                            const Divider(color: _kBorder, height: 20),
+                            const Divider(color: AppColors.border, height: 20),
                           ],
                         ),
                       ),
@@ -589,20 +638,20 @@ class _CommentTile extends StatelessWidget {
                   style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
-                      color: _kTextHigh)),
+                      color: AppColors.textHigh)),
               const Spacer(),
               if (comment.createdAt != null)
                 Text(
                   DateFormat('M.d HH:mm').format(comment.createdAt!),
-                  style: const TextStyle(color: _kTextLow, fontSize: 11),
+                  style: const TextStyle(color: AppColors.textLow, fontSize: 11),
                 ),
             ],
           ),
           const SizedBox(height: 4),
           Text(comment.content,
               style: const TextStyle(
-                  color: _kTextMid, fontSize: 13, height: 1.4)),
-          const Divider(color: _kBorder, height: 20),
+                  color: AppColors.textMid, fontSize: 13, height: 1.4)),
+          const Divider(color: AppColors.border, height: 20),
         ],
       ),
     );
@@ -626,8 +675,8 @@ class _CommentInput extends StatelessWidget {
         bottom: MediaQuery.of(context).viewInsets.bottom + 8,
       ),
       decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: _kBorder)),
+        color: const Color(0xFF111528),
+        border: Border(top: BorderSide(color: AppColors.border)),
       ),
       child: Row(
         children: [
@@ -635,12 +684,12 @@ class _CommentInput extends StatelessWidget {
             child: TextField(
               controller: ctrl,
               maxLength: 300,
-              style: const TextStyle(color: _kTextHigh, fontSize: 14),
+              style: const TextStyle(color: AppColors.textHigh, fontSize: 14),
               decoration: InputDecoration(
                 hintText: '댓글을 입력하세요',
-                hintStyle: const TextStyle(color: _kTextLow),
+                hintStyle: const TextStyle(color: AppColors.textLow),
                 filled: true,
-                fillColor: const Color(0xFFF1F5F9),
+                fillColor: const Color(0xFF161B30),
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 border: OutlineInputBorder(
@@ -656,10 +705,10 @@ class _CommentInput extends StatelessWidget {
               ? const SizedBox(
                   width: 36,
                   height: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: _kAccent))
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent))
               : IconButton(
                   onPressed: onSend,
-                  icon: const Icon(Icons.send, color: _kAccent),
+                  icon: const Icon(Icons.send, color: AppColors.accent),
                 ),
         ],
       ),

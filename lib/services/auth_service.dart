@@ -142,9 +142,17 @@ class AuthService {
     final posts = await _firestore.collection('posts')
         .where('authorId', isEqualTo: uid)
         .get();
-    if (posts.docs.isEmpty) return;
+    final comments = await _firestore.collectionGroup('comments')
+        .where('authorId', isEqualTo: uid)
+        .get();
+
+    if (posts.docs.isEmpty && comments.docs.isEmpty) return;
+
     final batch = _firestore.batch();
     for (final doc in posts.docs) {
+      batch.update(doc.reference, {'authorName': newName});
+    }
+    for (final doc in comments.docs) {
       batch.update(doc.reference, {'authorName': newName});
     }
     await batch.commit();
@@ -159,7 +167,36 @@ class AuthService {
   Future<void> deleteAccount(String uid) async {
     final user = _auth.currentUser;
     if (user == null) return;
-    await _firestore.collection('users').doc(uid).delete();
+
+    final predictions = await _firestore.collection('predictions')
+        .where('userId', isEqualTo: uid).get();
+    final posts = await _firestore.collection('posts')
+        .where('authorId', isEqualTo: uid).get();
+    final myComments = await _firestore.collectionGroup('comments')
+        .where('authorId', isEqualTo: uid).get();
+
+    final allRefs = <DocumentReference>[
+      _firestore.collection('users').doc(uid),
+      ...predictions.docs.map((d) => d.reference),
+      ...myComments.docs.map((d) => d.reference),
+    ];
+    for (final post in posts.docs) {
+      final postComments = await post.reference.collection('comments').get();
+      for (final c in postComments.docs) {
+        allRefs.add(c.reference);
+      }
+      allRefs.add(post.reference);
+    }
+
+    for (int i = 0; i < allRefs.length; i += 500) {
+      final batch = _firestore.batch();
+      final chunk = allRefs.sublist(i, (i + 500).clamp(0, allRefs.length));
+      for (final ref in chunk) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+
     await GoogleSignIn().signOut();
     await user.delete();
   }

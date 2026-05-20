@@ -36,6 +36,9 @@ dependencies:
   timezone: ^0.9.4
   shared_preferences: ^2.3.2
 
+  # 딥링크 / URL 열기
+  url_launcher: ^6.3.0
+
   # 소셜 로그인
   google_sign_in: ^6.2.0
   sign_in_with_apple: ^6.0.0

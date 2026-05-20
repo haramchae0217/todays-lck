@@ -1,4 +1,5 @@
-import 'dart:async';
+import 'dart:math' show max;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -7,9 +8,7 @@ import '../constants/colors.dart';
 import '../models/match.dart';
 import '../models/match_detail.dart';
 import '../models/standing.dart';
-import '../providers/auth_provider.dart';
 import '../services/lck_api_service.dart';
-import '../services/prediction_service.dart';
 import '../utils/team_utils.dart';
 import 'schedule_screen.dart' show scheduleProvider;
 import 'standings_screen.dart' show standingsProvider;
@@ -23,155 +22,35 @@ class MatchDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
-  // 예측 상태
-  String? _submittedPick;
-  String? _myPick;
-  ({int team1Count, int team2Count})? _stats;
-  bool _loadingPrediction = true;
-  bool _submitting = false;
-
   // 완료 경기 세트별 상세
   MatchDetail? _detail;
-
-  // 카운트다운 타이머
-  Timer? _timer;
-  Duration _remaining = Duration.zero;
-
-  bool get _isNew => _submittedPick == null;
 
   @override
   void initState() {
     super.initState();
-    // Clear cached event details so updated winner parsing applies
     if (widget.match.isCompleted) {
       LckApiService.instance.clearCache('getEventDetails?hl=ko-KR&id=${widget.match.id}');
+      _loadDetail();
     }
-    _loadData();
-    if (widget.match.isUpcoming) _startCountdown();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     super.dispose();
   }
 
-  void _startCountdown() {
-    _updateRemaining();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) _updateRemaining();
-    });
-  }
-
-  void _updateRemaining() {
-    final diff = widget.match.startTime.difference(DateTime.now());
-    setState(() => _remaining = diff.isNegative ? Duration.zero : diff);
-  }
-
-  Future<void> _loadData() async {
-    final match = widget.match;
-    final user = ref.read(authStateProvider).valueOrNull;
-
+  Future<void> _loadDetail() async {
     try {
-      final futures = <Future>[];
-      if (user != null) futures.add(PredictionService.instance.getMyPrediction(match.id));
-      futures.add(PredictionService.instance.getMatchStats(
-        matchId: match.id,
-        team1Code: match.team1.code,
-        team2Code: match.team2.code,
-      ));
-      if (match.isCompleted) futures.add(LckApiService.instance.getEventDetails(match.id));
-
-      final results = await Future.wait(futures);
+      var detail = await LckApiService.instance.getEventDetails(widget.match.id);
+      detail = await LckApiService.instance.enrichWithWindowData(detail, widget.match);
       if (!mounted) return;
-
-      int idx = 0;
-      String? pick;
-      ({int team1Count, int team2Count})? stats;
-      MatchDetail? detail;
-
-      if (user != null) {
-        pick = results[idx] as String?;
-        idx++;
-      }
-      stats = results[idx++] as ({int team1Count, int team2Count});
-      if (match.isCompleted && idx < results.length) {
-        detail = results[idx] as MatchDetail;
-      }
-
-      // 완료 경기는 게임 window 스탯도 병렬 로드
-      if (detail != null) {
-        detail = await LckApiService.instance.enrichWithWindowData(detail, match);
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _submittedPick = pick;
-        _myPick = pick;
-        _stats = stats;
-        _detail = detail;
-        _loadingPrediction = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _loadingPrediction = false);
-    }
-  }
-
-  void _select(String code) {
-    if (_submitting) return;
-    setState(() => _myPick = code);
-  }
-
-  Future<void> _confirm() async {
-    if (_myPick == null || _submitting) return;
-    setState(() => _submitting = true);
-    try {
-      if (_isNew) {
-        await PredictionService.instance.submitPrediction(
-          match: widget.match,
-          predictedTeamCode: _myPick!,
-        );
-      } else {
-        await PredictionService.instance.updatePrediction(
-          matchId: widget.match.id,
-          newTeamCode: _myPick!,
-        );
-      }
-      if (!mounted) return;
-      // 이전 pick을 먼저 저장해야 stats 계산이 정확함
-      final prevPick = _submittedPick;
-      setState(() {
-        _submittedPick = _myPick;
-        _submitting = false;
-        if (_stats != null) {
-          final t1 = widget.match.team1.code;
-          var t1c = _stats!.team1Count;
-          var t2c = _stats!.team2Count;
-          if (prevPick == t1) t1c--;
-          else if (prevPick != null) t2c--;
-          if (_myPick == t1) t1c++;
-          else t2c++;
-          _stats = (team1Count: t1c, team2Count: t2c);
-        }
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(_isNew ? '${_myPick!} 예측 완료!' : '${_myPick!}로 변경 완료!'),
-          backgroundColor: AppColors.accent,
-        ));
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _submitting = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-      }
-    }
+      setState(() => _detail = detail);
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     final match = widget.match;
-    final user = ref.watch(authStateProvider).valueOrNull;
     final standings = ref.watch(standingsProvider).valueOrNull ?? [];
     final scheduleState = ref.watch(scheduleProvider).valueOrNull;
 
@@ -187,6 +66,20 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: AppColors.bg,
         elevation: 0,
+        actions: [
+          if (match.isCompleted)
+            match.hasVod
+                ? IconButton(
+                    icon: const Icon(Icons.play_circle_outline),
+                    tooltip: 'VOD 보기',
+                    color: AppColors.accent,
+                    onPressed: _openVod,
+                  )
+                : const Padding(
+                    padding: EdgeInsets.only(right: 12),
+                    child: Icon(Icons.hourglass_empty, color: AppColors.textLow, size: 22),
+                  ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.only(bottom: 40),
@@ -196,29 +89,10 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
             // ── 상단 매치 카드 ──
             _MatchHeader(match: match),
 
-            // ── 예측 % 바 + 상태 라벨 ──
-            if (_stats != null)
-              _PredictionBar(
-                match: match,
-                stats: _stats!,
-                myPick: _submittedPick,
-              ),
-
             const SizedBox(height: 8),
 
             // ── 상태별 콘텐츠 ──
             if (match.isUpcoming) ...[
-              // 예측 UI (로그인 시)
-              if (user != null) _PredictSection(
-                match: match,
-                myPick: _myPick,
-                submittedPick: _submittedPick,
-                loading: _loadingPrediction,
-                submitting: _submitting,
-                remaining: _remaining,
-                onSelect: _select,
-                onConfirm: _confirm,
-              ),
               // 팀 비교 (순위 + 최근 폼)
               _TeamCompareCard(
                 match: match,
@@ -226,49 +100,11 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                 allMatches: scheduleState?.matches ?? [],
               ),
             ] else if (match.isLive) ...[
-              // 나의 예측 (읽기 전용)
-              if (_submittedPick != null)
-                _MyPickBadge(teamCode: _submittedPick!, match: match),
               // 라이브 안내
               const _LiveBanner(),
             ] else ...[
-              // 나의 예측 결과
-              if (!_loadingPrediction)
-                _MyResultCard(match: match, myPick: _submittedPick),
               // 세트별 결과
               if (_detail != null) _GameByGameCard(match: match, detail: _detail!),
-              // VOD 버튼 (없으면 준비중 표시)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: match.hasVod
-                      ? OutlinedButton.icon(
-                          onPressed: _openVod,
-                          icon: const Icon(Icons.play_circle_outline, size: 20),
-                          label: const Text('VOD 보기', style: TextStyle(fontSize: 14)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.accent,
-                            side: const BorderSide(color: AppColors.accent),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        )
-                      : OutlinedButton.icon(
-                          onPressed: null,
-                          icon: const Icon(Icons.hourglass_empty, size: 18),
-                          label: const Text('VOD 준비중', style: TextStyle(fontSize: 14)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.textLow,
-                            side: const BorderSide(color: AppColors.border),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                ),
-              ),
             ],
           ],
         ),
@@ -526,297 +362,6 @@ class _MatchHeader extends StatelessWidget {
   }
 }
 
-// ── 예측 % 바 ─────────────────────────────────────────────────────────────────
-class _PredictionBar extends StatelessWidget {
-  final LckMatch match;
-  final ({int team1Count, int team2Count}) stats;
-  final String? myPick;
-
-  const _PredictionBar({
-    required this.match,
-    required this.stats,
-    this.myPick,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final total = stats.team1Count + stats.team2Count;
-    if (total == 0) return const SizedBox.shrink();
-
-    final t1Pct = stats.team1Count / total;
-    final t2Pct = 1.0 - t1Pct;
-    final c1 = teamColor(match.team1.code);
-    final c2 = teamColor(match.team2.code);
-    final label = match.isCompleted
-        ? '예측 종료'
-        : match.isLive
-            ? '예측 마감'
-            : '승부 예측';
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Row(
-        children: [
-          // 팀1 %
-          Text(
-            '${(t1Pct * 100).toStringAsFixed(1)}%',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-              color: c1,
-            ),
-          ),
-          const Spacer(),
-          // 중앙 라벨 + 바
-          Expanded(
-            flex: 4,
-            child: Column(
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                        color: AppColors.textLow, fontSize: 11)),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: SizedBox(
-                    height: 8,
-                    child: Row(
-                      children: [
-                        if (stats.team1Count > 0)
-                          Expanded(
-                            flex: stats.team1Count,
-                            child: Container(color: c1),
-                          ),
-                        if (stats.team2Count > 0)
-                          Expanded(
-                            flex: stats.team2Count,
-                            child: Container(color: c2),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '총 $total명 참여',
-                  style: const TextStyle(
-                      color: AppColors.textLow, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-          const Spacer(),
-          // 팀2 %
-          Text(
-            '${(t2Pct * 100).toStringAsFixed(1)}%',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-              color: c2,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── 예측 UI (예정 경기) ───────────────────────────────────────────────────────
-class _PredictSection extends StatelessWidget {
-  final LckMatch match;
-  final String? myPick;
-  final String? submittedPick;
-  final bool loading;
-  final bool submitting;
-  final Duration remaining;
-  final ValueChanged<String> onSelect;
-  final VoidCallback onConfirm;
-
-  const _PredictSection({
-    required this.match,
-    this.myPick,
-    this.submittedPick,
-    required this.loading,
-    required this.submitting,
-    required this.remaining,
-    required this.onSelect,
-    required this.onConfirm,
-  });
-
-  String _fmt(Duration r) {
-    if (r <= Duration.zero) return '';
-    final d = r.inDays;
-    final h = (r.inHours % 24).toString().padLeft(2, '0');
-    final m = (r.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (r.inSeconds % 60).toString().padLeft(2, '0');
-    if (d > 0) return '${d}일 $h:$m:$s';
-    return '$h:$m:$s';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isNew = submittedPick == null;
-    final hasChanged = submittedPick != null && myPick != submittedPick;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: loading
-          ? const Center(
-              child: Padding(
-              padding: EdgeInsets.all(8),
-              child: CircularProgressIndicator(
-                  color: AppColors.accent, strokeWidth: 2),
-            ))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (isNew)
-                  Row(
-                    children: [
-                      const Text(
-                        '어느 팀이 이길까요?',
-                        style: TextStyle(color: AppColors.textMid, fontSize: 13),
-                      ),
-                      const Spacer(),
-                      if (_fmt(remaining).isNotEmpty)
-                        Text(
-                          _fmt(remaining),
-                          style: const TextStyle(
-                            color: AppColors.textLow,
-                            fontSize: 12,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                    ],
-                  ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _TeamPick(
-                      team: match.team1,
-                      selected: myPick == match.team1.code,
-                      confirmed: submittedPick == match.team1.code,
-                      onTap: () => onSelect(match.team1.code),
-                    )),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: _TeamPick(
-                      team: match.team2,
-                      selected: myPick == match.team2.code,
-                      confirmed: submittedPick == match.team2.code,
-                      onTap: () => onSelect(match.team2.code),
-                    )),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (isNew || hasChanged)
-                  SizedBox(
-                    width: double.infinity,
-                    height: 40,
-                    child: ElevatedButton(
-                      onPressed: myPick == null || submitting ? null : onConfirm,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: hasChanged
-                            ? const Color(0xFFD97706)
-                            : AppColors.accent,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: AppColors.border,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                      ),
-                      child: submitting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : Text(
-                              hasChanged ? '변경 확정' : '예측 확정',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 14)),
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: AppColors.accent.withValues(alpha: 0.2)),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        '✅ 예측 완료  |  다른 팀을 눌러 변경',
-                        style: TextStyle(
-                            color: AppColors.textMid, fontSize: 12),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-    );
-  }
-}
-
-class _TeamPick extends StatelessWidget {
-  final MatchTeam team;
-  final bool selected;
-  final bool confirmed;
-  final VoidCallback onTap;
-
-  const _TeamPick({
-    required this.team,
-    required this.selected,
-    required this.confirmed,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = teamColor(team.code);
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? c.withValues(alpha: 0.12) : const Color(0xFF161B30),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-              color: selected ? c : AppColors.border,
-              width: selected ? 2 : 1),
-        ),
-        child: Column(
-          children: [
-            _TeamLogo(imageUrl: team.imageUrl, size: 30),
-            const SizedBox(height: 6),
-            Text(team.code,
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: selected ? c : AppColors.textMid)),
-            if (selected) ...[
-              const SizedBox(height: 6),
-              Icon(
-                confirmed ? Icons.check_circle : Icons.radio_button_checked,
-                color: c,
-                size: 16,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 
 // ── 팀 비교 카드 (예정 경기) ───────────────────────────────────────────────────
@@ -845,7 +390,6 @@ class _TeamCompareCard extends StatelessWidget {
     }).toList();
   }
 
-  // 게임 단위 승률 (매치 W/L이 아닌 게임 수 기반)
   double _gameWinRate(String teamCode) {
     final completed = allMatches.where((m) =>
         m.isCompleted &&
@@ -864,7 +408,6 @@ class _TeamCompareCard extends StatelessWidget {
     return gTotal > 0 ? gWins / gTotal : 0.0;
   }
 
-  // 연속 승패 스트릭
   String _streak(String teamCode) {
     final form = _recentForm(teamCode);
     if (form.isEmpty) return '';
@@ -880,18 +423,14 @@ class _TeamCompareCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (standings.isEmpty) return const SizedBox.shrink();
-
     final t1 = match.team1;
     final t2 = match.team2;
     final s1 = standings.firstWhere((s) => s.teamCode == t1.code,
-        orElse: () => Standing(
-            rank: 0, teamName: t1.name, teamCode: t1.code,
+        orElse: () => Standing(rank: 0, teamName: t1.name, teamCode: t1.code,
             imageUrl: '', wins: t1.wins, losses: t1.losses));
     final s2 = standings.firstWhere((s) => s.teamCode == t2.code,
-        orElse: () => Standing(
-            rank: 0, teamName: t2.name, teamCode: t2.code,
+        orElse: () => Standing(rank: 0, teamName: t2.name, teamCode: t2.code,
             imageUrl: '', wins: t2.wins, losses: t2.losses));
-
     final form1 = _recentForm(t1.code);
     final form2 = _recentForm(t2.code);
     final wr1 = s1.wins + s1.losses > 0 ? s1.wins / (s1.wins + s1.losses) : 0.0;
@@ -913,120 +452,72 @@ class _TeamCompareCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 헤더
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: Row(
               children: [
-                const Text('팀 미리보기',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: AppColors.textHigh)),
+                const Text('팀 미리보기', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textHigh)),
                 const Spacer(),
-                const Text('최근 5경기 기반',
-                    style: TextStyle(color: AppColors.textLow, fontSize: 10)),
+                const Text('최근 5경기 기반', style: TextStyle(color: AppColors.textLow, fontSize: 10)),
               ],
             ),
           ),
           const Divider(height: 1, color: AppColors.border),
           const SizedBox(height: 16),
-          // 팀 이름 + 순위 + W-L + 스트릭
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 팀1
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(t1.code,
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 20,
-                              color: c1)),
+                      Text(t1.code, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: c1)),
                       const SizedBox(height: 2),
-                      Text(
-                        s1.rank > 0
-                            ? '${s1.rank}위  •  ${s1.wins}W-${s1.losses}L'
-                            : '${s1.wins}W-${s1.losses}L',
-                        style: const TextStyle(
-                            color: AppColors.textMid, fontSize: 11),
-                      ),
+                      Text(s1.rank > 0 ? '${s1.rank}위  •  ${s1.wins}W-${s1.losses}L' : '${s1.wins}W-${s1.losses}L',
+                          style: const TextStyle(color: AppColors.textMid, fontSize: 11)),
                       if (streak1.isNotEmpty) ...[
                         const SizedBox(height: 3),
-                        Text(streak1,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: streak1.contains('승') ? AppColors.win : AppColors.lose,
-                            )),
+                        Text(streak1, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                            color: streak1.contains('승') ? AppColors.win : AppColors.lose)),
                       ],
                       const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          for (int i = 0; i < form1.length; i++) ...[
-                            if (i > 0) const SizedBox(width: 3),
-                            _FormBadge(isWin: form1[i]),
-                          ],
+                      Row(children: [
+                        for (int i = 0; i < form1.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 3),
+                          _FormBadge(isWin: form1[i]),
                         ],
-                      ),
+                      ]),
                     ],
                   ),
                 ),
-                // VS
                 const Padding(
                   padding: EdgeInsets.only(top: 6),
-                  child: SizedBox(
-                    width: 48,
-                    child: Center(
-                      child: Text('VS',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                              color: AppColors.textLow)),
-                    ),
-                  ),
+                  child: SizedBox(width: 48, child: Center(
+                    child: Text('VS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.textLow)),
+                  )),
                 ),
-                // 팀2
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text(t2.code,
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 20,
-                              color: c2)),
+                      Text(t2.code, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: c2)),
                       const SizedBox(height: 2),
-                      Text(
-                        s2.rank > 0
-                            ? '${s2.wins}W-${s2.losses}L  •  ${s2.rank}위'
-                            : '${s2.wins}W-${s2.losses}L',
-                        style: const TextStyle(
-                            color: AppColors.textMid, fontSize: 11),
-                      ),
+                      Text(s2.rank > 0 ? '${s2.wins}W-${s2.losses}L  •  ${s2.rank}위' : '${s2.wins}W-${s2.losses}L',
+                          style: const TextStyle(color: AppColors.textMid, fontSize: 11)),
                       if (streak2.isNotEmpty) ...[
                         const SizedBox(height: 3),
-                        Text(streak2,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: streak2.contains('승') ? AppColors.win : AppColors.lose,
-                            )),
+                        Text(streak2, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                            color: streak2.contains('승') ? AppColors.win : AppColors.lose)),
                       ],
                       const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          for (int i = 0; i < form2.length; i++) ...[
-                            if (i > 0) const SizedBox(width: 3),
-                            _FormBadge(isWin: form2[i]),
-                          ],
+                      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                        for (int i = 0; i < form2.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 3),
+                          _FormBadge(isWin: form2[i]),
                         ],
-                      ),
+                      ]),
                     ],
                   ),
                 ),
@@ -1035,27 +526,21 @@ class _TeamCompareCard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           const Divider(height: 1, color: AppColors.border),
-          // 매치 승률
           _StatBarRow(
             label: '매치 승률',
             leftVal: wr1 > 0 ? '${(wr1 * 100).round()}%' : '-',
             rightVal: wr2 > 0 ? '${(wr2 * 100).round()}%' : '-',
             leftFrac: (wr1 + wr2 > 0) ? wr1 / (wr1 + wr2) : 0.5,
-            c1: c1,
-            c2: c2,
-            leftHigher: wr1 >= wr2,
+            c1: c1, c2: c2, leftHigher: wr1 >= wr2,
           ),
           const SizedBox(height: 10),
-          // 게임 승률
           if (gwr1 > 0 || gwr2 > 0)
             _StatBarRow(
               label: '게임 승률',
               leftVal: gwr1 > 0 ? '${(gwr1 * 100).round()}%' : '-',
               rightVal: gwr2 > 0 ? '${(gwr2 * 100).round()}%' : '-',
               leftFrac: (gwr1 + gwr2 > 0) ? gwr1 / (gwr1 + gwr2) : 0.5,
-              c1: c1,
-              c2: c2,
-              leftHigher: gwr1 >= gwr2,
+              c1: c1, c2: c2, leftHigher: gwr1 >= gwr2,
             ),
           const SizedBox(height: 10),
         ],
@@ -1064,12 +549,11 @@ class _TeamCompareCard extends StatelessWidget {
   }
 }
 
-// 수치 + 프로그레스 바 한 줄
 class _StatBarRow extends StatelessWidget {
   final String label;
   final String leftVal;
   final String rightVal;
-  final double leftFrac; // 0.0~1.0
+  final double leftFrac;
   final Color c1;
   final Color c2;
   final bool leftHigher;
@@ -1093,21 +577,13 @@ class _StatBarRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(leftVal,
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: leftHigher ? c1 : AppColors.textMid)),
+              Text(leftVal, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15,
+                  color: leftHigher ? c1 : AppColors.textMid)),
               const Spacer(),
-              Text(label,
-                  style: const TextStyle(
-                      color: AppColors.textLow, fontSize: 11)),
+              Text(label, style: const TextStyle(color: AppColors.textLow, fontSize: 11)),
               const Spacer(),
-              Text(rightVal,
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: !leftHigher ? c2 : AppColors.textMid)),
+              Text(rightVal, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15,
+                  color: !leftHigher ? c2 : AppColors.textMid)),
             ],
           ),
           const SizedBox(height: 6),
@@ -1145,25 +621,14 @@ class _FormBadge extends StatelessWidget {
       width: 20,
       height: 20,
       decoration: BoxDecoration(
-        color: isWin
-            ? AppColors.win.withValues(alpha: 0.15)
-            : AppColors.lose.withValues(alpha: 0.15),
+        color: isWin ? AppColors.win.withValues(alpha: 0.15) : AppColors.lose.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(3),
-        border: Border.all(
-          color: isWin
-              ? AppColors.win.withValues(alpha: 0.4)
-              : AppColors.lose.withValues(alpha: 0.4),
-        ),
+        border: Border.all(color: isWin ? AppColors.win.withValues(alpha: 0.4) : AppColors.lose.withValues(alpha: 0.4)),
       ),
       child: Center(
-        child: Text(
-          isWin ? 'W' : 'L',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            color: isWin ? AppColors.win : AppColors.lose,
-          ),
-        ),
+        child: Text(isWin ? 'W' : 'L',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold,
+                color: isWin ? AppColors.win : AppColors.lose)),
       ),
     );
   }
@@ -1188,93 +653,8 @@ class _LiveBanner extends StatelessWidget {
         children: [
           Icon(Icons.circle, color: AppColors.live, size: 10),
           SizedBox(width: 8),
-          Text(
-            '경기가 진행 중입니다',
-            style: TextStyle(
-                color: AppColors.live,
-                fontWeight: FontWeight.w600,
-                fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── 내 예측 표시 (라이브) ──────────────────────────────────────────────────────
-class _MyPickBadge extends StatelessWidget {
-  final String teamCode;
-  final LckMatch match;
-  const _MyPickBadge({required this.teamCode, required this.match});
-
-  @override
-  Widget build(BuildContext context) {
-    final c = teamColor(teamCode);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: c.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.how_to_vote_outlined, size: 18, color: AppColors.textMid),
-          const SizedBox(width: 8),
-          const Text('내 예측: ', style: TextStyle(color: AppColors.textMid, fontSize: 13)),
-          Text(teamCode,
-              style: TextStyle(
-                  color: c, fontWeight: FontWeight.bold, fontSize: 14)),
-        ],
-      ),
-    );
-  }
-}
-
-// ── 결과 카드 ─────────────────────────────────────────────────────────────────
-class _MyResultCard extends StatelessWidget {
-  final LckMatch match;
-  final String? myPick;
-  const _MyResultCard({required this.match, this.myPick});
-
-  @override
-  Widget build(BuildContext context) {
-    if (myPick == null) return const SizedBox.shrink();
-    final winner = match.team1.outcome == 'win' ? match.team1.code : match.team2.code;
-    final correct = myPick == winner;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: BoxDecoration(
-        color: correct
-            ? AppColors.win.withValues(alpha: 0.07)
-            : AppColors.lose.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: correct
-              ? AppColors.win.withValues(alpha: 0.3)
-              : AppColors.lose.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(
-            correct ? '✅' : '❌',
-            style: const TextStyle(fontSize: 18),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            correct
-                ? '적중! ($myPick 예측)'
-                : '불일치  (예측: $myPick  /  실제: $winner)',
-            style: TextStyle(
-              color: correct ? AppColors.win : AppColors.lose,
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
-          ),
+          Text('경기가 진행 중입니다',
+              style: TextStyle(color: AppColors.live, fontWeight: FontWeight.w600, fontSize: 14)),
         ],
       ),
     );
@@ -1555,6 +935,11 @@ class _GameSetView extends StatelessWidget {
               c1: c1, c2: c2,
               leftHigher: s1.barons >= s2.barons,
             ),
+
+            const SizedBox(height: 16),
+            // Gold Graph
+            if (game.gameId != null && game.gameStartUtc != null && game.durationSeconds != null)
+              _GoldSection(game: game, leftColor: c1, rightColor: c2),
           ],
         ],
       ),
@@ -1846,6 +1231,197 @@ class _DragonRow extends StatelessWidget {
       ],
     );
   }
+}
+
+// ── 골드 타임라인 그래프 ──────────────────────────────────────────────────────
+
+class _GoldSection extends StatefulWidget {
+  final GameDetail game;
+  final Color leftColor;
+  final Color rightColor;
+  const _GoldSection({required this.game, required this.leftColor, required this.rightColor});
+
+  @override
+  State<_GoldSection> createState() => _GoldSectionState();
+}
+
+class _GoldSectionState extends State<_GoldSection> {
+  List<({int seconds, int blueGold, int redGold})>? _points;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  @override
+  void didUpdateWidget(_GoldSection old) {
+    super.didUpdateWidget(old);
+    if (old.game.gameId != widget.game.gameId) {
+      setState(() { _points = null; _loading = true; });
+      _fetch();
+    }
+  }
+
+  Future<void> _fetch() async {
+    final pts = await LckApiService.instance.getGoldTimeline(
+      widget.game.gameId!,
+      widget.game.gameStartUtc!,
+      widget.game.durationSeconds!,
+    );
+    if (mounted) setState(() { _points = pts; _loading = false; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('골드 그래프', style: TextStyle(fontSize: 11, color: AppColors.accent, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+        const SizedBox(height: 8),
+        Container(
+          height: 150,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1021),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.border),
+          ),
+          padding: const EdgeInsets.fromLTRB(4, 8, 8, 4),
+          child: _loading
+              ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent)))
+              : (_points == null || _points!.isEmpty)
+                  ? const Center(child: Text('데이터 없음', style: TextStyle(color: AppColors.textLow, fontSize: 12)))
+                  : CustomPaint(
+                      painter: _GoldDiffPainter(_points!, widget.leftColor, widget.rightColor),
+                      child: const SizedBox.expand(),
+                    ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GoldDiffPainter extends CustomPainter {
+  final List<({int seconds, int blueGold, int redGold})> points;
+  final Color blueColor;
+  final Color redColor;
+
+  const _GoldDiffPainter(this.points, this.blueColor, this.redColor);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 2) return;
+
+    const padL = 36.0, padR = 4.0, padT = 10.0, padB = 18.0;
+    final pw = size.width - padL - padR;
+    final ph = size.height - padT - padB;
+
+    final diffs = points.map((p) => p.blueGold - p.redGold).toList();
+    final maxAbsDiff = diffs.map((d) => d.abs()).reduce(max);
+    if (maxAbsDiff == 0) return;
+
+    final yMax = ((maxAbsDiff / 1000).ceil() * 1000).toDouble();
+    final maxSecs = points.last.seconds.toDouble();
+    final maxMins = (maxSecs / 60).ceil();
+    final zeroY = padT + ph / 2;
+
+    double gx(double s) => padL + (s / maxSecs) * pw;
+    double gy(double d) => zeroY - (d / yMax) * (ph / 2);
+
+    final gridPaint = Paint()..color = Colors.white.withOpacity(0.06)..strokeWidth = 1;
+    final zeroPaint = Paint()..color = Colors.white.withOpacity(0.2)..strokeWidth = 1;
+    final labelStyle = TextStyle(fontSize: 9, color: Colors.white.withOpacity(0.35));
+
+    // Horizontal grid lines
+    for (final d in [yMax, yMax / 2, 0.0, -yMax / 2, -yMax]) {
+      final yy = gy(d);
+      canvas.drawLine(Offset(padL, yy), Offset(padL + pw, yy), d == 0 ? zeroPaint : gridPaint);
+    }
+
+    // Y axis labels (right-aligned to padL)
+    final kNum = yMax / 1000;
+    final kStr = kNum == kNum.truncateToDouble() ? '${kNum.toInt()}K' : '${kNum.toStringAsFixed(1)}K';
+    _drawLabel(canvas, kStr, padL - 3, gy(yMax) - 5, labelStyle);
+    _drawLabel(canvas, '0', padL - 3, zeroY - 5, labelStyle);
+    _drawLabel(canvas, kStr, padL - 3, gy(-yMax) - 5, labelStyle);
+
+    // Vertical grid (every 5 or 10 min)
+    final interval = maxMins <= 35 ? 5 : 10;
+    for (var m = interval; m <= maxMins; m += interval) {
+      final xx = gx(m * 60.0);
+      if (xx > padL && xx < padL + pw) {
+        canvas.drawLine(Offset(xx, padT), Offset(xx, padT + ph), gridPaint);
+        _drawText(canvas, "$m'", Offset(xx - 7, padT + ph + 3), labelStyle);
+      }
+    }
+
+    // Fill area
+    final blueFill = Paint()..color = blueColor.withOpacity(0.38)..style = PaintingStyle.fill;
+    final redFill = Paint()..color = redColor.withOpacity(0.38)..style = PaintingStyle.fill;
+
+    for (var i = 0; i < diffs.length - 1; i++) {
+      final t1 = points[i].seconds.toDouble();
+      final t2 = points[i + 1].seconds.toDouble();
+      final d1 = diffs[i].toDouble();
+      final d2 = diffs[i + 1].toDouble();
+      final x1 = gx(t1), x2 = gx(t2);
+      final y1 = gy(d1), y2 = gy(d2);
+
+      if (d1 >= 0 && d2 >= 0) {
+        _fillSeg(canvas, x1, y1, x2, y2, zeroY, blueFill);
+      } else if (d1 <= 0 && d2 <= 0) {
+        _fillSeg(canvas, x1, y1, x2, y2, zeroY, redFill);
+      } else {
+        // Crosses zero: split at crossing point
+        final ratio = d1.abs() / (d1.abs() + d2.abs());
+        final xZ = x1 + (x2 - x1) * ratio;
+        _fillSeg(canvas, x1, y1, xZ, zeroY, zeroY, d1 > 0 ? blueFill : redFill);
+        _fillSeg(canvas, xZ, zeroY, x2, y2, zeroY, d2 > 0 ? blueFill : redFill);
+      }
+    }
+
+    // Border line (colored by leader)
+    for (var i = 0; i < diffs.length - 1; i++) {
+      final t1 = points[i].seconds.toDouble();
+      final t2 = points[i + 1].seconds.toDouble();
+      final d1 = diffs[i].toDouble();
+      final d2 = diffs[i + 1].toDouble();
+      canvas.drawLine(
+        Offset(gx(t1), gy(d1)), Offset(gx(t2), gy(d2)),
+        Paint()
+          ..color = ((d1 + d2) >= 0 ? blueColor : redColor).withOpacity(0.9)
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+  }
+
+  void _fillSeg(Canvas canvas, double x1, double y1, double x2, double y2, double baseY, Paint p) {
+    canvas.drawPath(
+      Path()
+        ..moveTo(x1, baseY)
+        ..lineTo(x1, y1)
+        ..lineTo(x2, y2)
+        ..lineTo(x2, baseY)
+        ..close(),
+      p,
+    );
+  }
+
+  void _drawLabel(Canvas canvas, String text, double rightEdgeX, double y, TextStyle style) {
+    final tp = TextPainter(text: TextSpan(text: text, style: style), textDirection: ui.TextDirection.ltr)..layout();
+    tp.paint(canvas, Offset(rightEdgeX - tp.width, y));
+  }
+
+  void _drawText(Canvas canvas, String text, Offset offset, TextStyle style) {
+    final tp = TextPainter(text: TextSpan(text: text, style: style), textDirection: ui.TextDirection.ltr)..layout();
+    tp.paint(canvas, offset);
+  }
+
+  @override
+  bool shouldRepaint(_GoldDiffPainter old) => old.points != points;
 }
 
 // ── 팀 로고 ───────────────────────────────────────────────────────────────────

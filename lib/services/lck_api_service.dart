@@ -21,6 +21,12 @@ class LckApiService {
   final _cache = <String, ({String body, int ts})>{};
   static const _cacheTtlMs = 15 * 60 * 1000; // 15분
 
+  // Leaguepedia MatchSchedule 기준 team1 코드 맵
+  // key: "yyyy-MM-dd_CODEA_CODEB" (codes sorted) → LP Team1 code
+  Map<String, String>? _lpTeam1Map;
+
+  Map<String, String>? _teamImagesByCode;
+
   void clearCache([String? prefix]) {
     if (prefix == null) {
       _cache.clear();
@@ -57,6 +63,10 @@ class LckApiService {
     final tokenParam = pageToken != null ? '&pageToken=$pageToken' : '';
     final endpoint =
         'getSchedule?hl=ko-KR&leagueId=${ApiConstants.scheduleLeagueIds}$tokenParam';
+
+    // LP 순서 맵을 미리 로드 (첫 호출에만 실제 요청)
+    await _ensureLpTeam1Map();
+
     return _get(
       endpoint,
       (data) {
@@ -66,7 +76,7 @@ class LckApiService {
             schedule['pages'] as Map<String, dynamic>? ?? {};
         final matches = events
             .where((e) => e['type'] == 'match')
-            .map((e) => LckMatch.fromJson(e as Map<String, dynamic>))
+            .map((e) => _applyLpOrdering(LckMatch.fromJson(e as Map<String, dynamic>)))
             .toList();
         return ScheduleResult(
           matches: matches,
@@ -74,8 +84,77 @@ class LckApiService {
           newerToken: pages['newer'] as String?,
         );
       },
-      cache: pageToken == null, // 첫 페이지만 캐시
+      cache: true,
     );
+  }
+
+  // Leaguepedia MatchSchedule 기준 team1 순서 맵 로드 (한 번만)
+  Future<void> _ensureLpTeam1Map() async {
+    if (_lpTeam1Map != null) return;
+    try {
+      final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'MatchSchedule',
+        'fields': 'Team1,Team2,DateTime_UTC',
+        'where': "OverviewPage LIKE 'LCK/2026%'",
+        'format': 'json',
+        'limit': '500',
+      });
+      final res = await http.get(uri, headers: const {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200 || res.body.isEmpty) {
+        _lpTeam1Map = {};
+        return;
+      }
+      final rows = jsonDecode(res.body) as List;
+      final map = <String, String>{};
+      for (final row in rows) {
+        final t1Name = (row['Team1'] as String? ?? '').trim();
+        final t2Name = (row['Team2'] as String? ?? '').trim();
+        final t1Code = _lpNameToCode[t1Name];
+        final t2Code = _lpNameToCode[t2Name];
+        final dateUtc = (row['DateTime UTC'] as String? ?? '');
+        if (t1Code == null || t2Code == null || dateUtc.length < 10) continue;
+        final dateKey = dateUtc.substring(0, 10);
+        final codes = [t1Code, t2Code]..sort();
+        map['${dateKey}_${codes[0]}_${codes[1]}'] = t1Code;
+      }
+      _lpTeam1Map = map;
+      debugPrint('[LP] MatchSchedule loaded: ${map.length} matches');
+    } catch (e) {
+      debugPrint('[LP] MatchSchedule error: $e');
+      _lpTeam1Map = {};
+    }
+  }
+
+  // LP 순서 기준으로 필요하면 team1/team2 swap
+  LckMatch _applyLpOrdering(LckMatch match) {
+    final map = _lpTeam1Map;
+    if (map == null || map.isEmpty) return match;
+    if (match.leagueSlug != 'lck') return match;
+
+    final dateKey = match.startTime.toUtc().toIso8601String().substring(0, 10);
+    final codes = [match.team1.code, match.team2.code]..sort();
+    final key = '${dateKey}_${codes[0]}_${codes[1]}';
+    final lpTeam1 = map[key];
+
+    if (lpTeam1 != null && lpTeam1 == match.team2.code) {
+      return LckMatch(
+        id: match.id,
+        startTime: match.startTime,
+        state: match.state,
+        blockName: match.blockName,
+        team1: match.team2,
+        team2: match.team1,
+        bestOf: match.bestOf,
+        hasVod: match.hasVod,
+        leagueName: match.leagueName,
+        leagueSlug: match.leagueSlug,
+      );
+    }
+    return match;
   }
 
   Future<List<Standing>> getStandings({String? tournamentId}) async {
@@ -351,6 +430,7 @@ class LckApiService {
 
   // 실제 Leaguepedia 팀 이름 (2026 시즌 기준, 스폰서 변경 반영)
   static const _leaguepediaTeamAliases = <String, List<String>>{
+    // 2026 LCK 활성 팀
     'T1':  ['T1'],
     'GEN': ['Gen.G'],
     'HLE': ['Hanwha Life Esports', 'HLE'],
@@ -361,6 +441,35 @@ class LckApiService {
     'BFX': ['BNK FEARX', 'BNK FearX'],
     'KRX': ['Kiwoom DRX', 'DRX'],
     'DNS': ['DN SOOPers', 'DN Freecs'],
+    // 2024 LCK 역사 팀
+    'KDF': ['Kwangdong Freecs', 'KDF'],
+    'LSB': ['Liiv SANDBOX', 'LSB'],
+    // 주요 해외 팀
+    'G2':  ['G2 Esports', 'G2'],
+    'FNC': ['Fnatic'],
+    'MAD': ['MAD Lions', 'KOI'],
+    'VIT': ['Team Vitality', 'Vitality'],
+    'TL':  ['Team Liquid', 'Team Liquid Honda'],
+    'C9':  ['Cloud9'],
+    'FLY': ['FlyQuest'],
+    '100': ['100 Thieves'],
+    'EG':  ['Evil Geniuses'],
+    'JDG': ['JD Gaming', 'JDG'],
+    'BLG': ['Bilibili Gaming', 'BLG'],
+    'EDG': ['Edward Gaming', 'EDG'],
+    'RNG': ['Royal Never Give Up', 'RNG'],
+    'WBG': ['Weibo Gaming', 'WBG'],
+    'FPX': ['FunPlus Phoenix', 'FPX'],
+    'TES': ['Top Esports', 'TES'],
+    'LNG': ['LNG Esports', 'LNG'],
+    'NRG': ['NRG Esports', 'NRG'],
+    'PRX': ['Paper Rex', 'PRX'],
+    'GAM': ['GAM Esports', 'GAM'],
+    'PSG': ['PSG Talon'],
+    'GG':  ['Golden Guardians', 'GG'],
+    'SHG': ['Shopify Rebellion', 'SHG'],
+    'DFM': ['DetonatioN FocusMe', 'DFM'],
+    'CFO': ['CFO'],
   };
 
   // Leaguepedia 표시명 → DDragon 내부 ID 변환
@@ -392,6 +501,151 @@ class LckApiService {
     if (_champExceptions.containsKey(displayName)) return _champExceptions[displayName]!;
     // 공백, 특수문자 제거 후 단어별 대소문자 유지
     return displayName.replaceAll(RegExp(r"['\s&\.]"), '');
+  }
+
+  // LCK 전체 시즌 팀별 게임 승/패 집계 (Leaguepedia)
+  Future<Map<String, ({int wins, int losses})>> getTeamGameRecords() async {
+    const cacheKey = 'team_game_records_lck2026_v3';
+    final hit = _cache[cacheKey];
+    if (hit != null && DateTime.now().millisecondsSinceEpoch - hit.ts < _cacheTtlMs) {
+      return _parseTeamGameRecords(hit.body);
+    }
+
+    try {
+      final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'ScoreboardGames',
+        'fields': 'Team1,Team2,WinTeam',
+        'where': "_pageName LIKE 'LCK/2026%' AND _pageName NOT LIKE '%Cup%'",
+        'format': 'json',
+        'limit': '500',
+      });
+      final res = await http.get(uri, headers: const {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200 || res.body.isEmpty) return {};
+      _cache[cacheKey] = (body: res.body, ts: DateTime.now().millisecondsSinceEpoch);
+      return _parseTeamGameRecords(res.body);
+    } catch (e) {
+      debugPrint('[LP] getTeamGameRecords error: $e');
+      return {};
+    }
+  }
+
+  // Leaguepedia 이름 → 팀 코드 역방향 맵
+  static final _lpNameToCode = <String, String>{
+    for (final entry in _leaguepediaTeamAliases.entries)
+      for (final alias in entry.value) alias: entry.key,
+  };
+
+  Map<String, ({int wins, int losses})> _parseTeamGameRecords(String body) {
+    final rows = jsonDecode(body) as List? ?? [];
+    final wins = <String, int>{};
+    final losses = <String, int>{};
+    for (final row in rows) {
+      final t1 = _lpNameToCode[row['Team1'] as String? ?? ''];
+      final t2 = _lpNameToCode[row['Team2'] as String? ?? ''];
+      final winner = _lpNameToCode[row['WinTeam'] as String? ?? ''];
+      if (t1 == null || t2 == null || winner == null) continue;
+      wins[winner] = (wins[winner] ?? 0) + 1;
+      final loser = winner == t1 ? t2 : t1;
+      losses[loser] = (losses[loser] ?? 0) + 1;
+    }
+    final codes = {...wins.keys, ...losses.keys};
+    return {for (final c in codes) c: (wins: wins[c] ?? 0, losses: losses[c] ?? 0)};
+  }
+
+  // 게임 골드 타임라인 (블루팀/레드팀 시간별 골드)
+  Future<List<({int seconds, int blueGold, int redGold})>> getGoldTimeline(
+      String gameId, DateTime gameStart, int durationSeconds) async {
+    final cacheKey = 'gold_$gameId';
+    final hit = _cache[cacheKey];
+    if (hit != null && DateTime.now().millisecondsSinceEpoch - hit.ts < _cacheTtlMs) {
+      if (hit.body.isEmpty) return [];
+      return _parseGoldTimeline(hit.body);
+    }
+
+    // 2분 단위 window 40개 병렬 요청 (80분 커버 — chapter start 기준이어도 충분)
+    // stride를 좁게 해서 window 간 공백 제거 (각 window는 약 3-4분 데이터 반환)
+    const strideMin = 2;
+    const numWindows = 40;
+    final allFrames = <Map<String, dynamic>>[];
+
+    await Future.wait(
+      List.generate(numWindows, (i) async {
+        final rawMs = gameStart.add(Duration(minutes: i * strideMin)).toUtc().millisecondsSinceEpoch;
+        // API requires startingTime divisible by 10 seconds — floor to nearest 10s
+        final snapped = DateTime.fromMillisecondsSinceEpoch((rawMs ~/ 10000) * 10000, isUtc: true);
+        final t = '${snapped.toIso8601String().substring(0, 19)}.000Z';
+        try {
+          final res = await http.get(
+            Uri.parse('https://feed.lolesports.com/livestats/v1/window/$gameId?startingTime=$t'),
+            headers: const {
+              'origin': 'https://lolesports.com',
+              'referer': 'https://lolesports.com/',
+            },
+          ).timeout(const Duration(seconds: 15));
+          if (res.statusCode == 200 && res.body.isNotEmpty) {
+            final data = jsonDecode(res.body) as Map<String, dynamic>;
+            final frames = (data['frames'] as List? ?? []).cast<Map<String, dynamic>>();
+            allFrames.addAll(frames);
+          }
+        } catch (e) {
+          debugPrint('[Gold] window $i error: $e');
+        }
+      }),
+    );
+
+    if (allFrames.isEmpty) {
+      _cache[cacheKey] = (body: '', ts: DateTime.now().millisecondsSinceEpoch);
+      return [];
+    }
+    final combined = jsonEncode(allFrames);
+    _cache[cacheKey] = (body: combined, ts: DateTime.now().millisecondsSinceEpoch);
+    return _parseGoldTimeline(combined);
+  }
+
+  List<({int seconds, int blueGold, int redGold})> _parseGoldTimeline(String body) {
+    try {
+      final frames = jsonDecode(body) as List;
+
+      // 타임스탬프 순 정렬
+      final sorted = frames
+          .where((f) => f['rfc460Timestamp'] != null)
+          .toList()
+        ..sort((a, b) => (a['rfc460Timestamp'] as String).compareTo(b['rfc460Timestamp'] as String));
+
+      // 골드가 처음 등장하는 프레임 = 실제 게임 시작 기준점
+      DateTime? effectiveStart;
+      for (final frame in sorted) {
+        final bg = (frame['blueTeam']?['totalGold'] as int?) ?? 0;
+        final rg = (frame['redTeam']?['totalGold'] as int?) ?? 0;
+        if (bg > 0 || rg > 0) {
+          effectiveStart = DateTime.tryParse(frame['rfc460Timestamp'] as String? ?? '');
+          break;
+        }
+      }
+      if (effectiveStart == null) return [];
+
+      final seen = <int>{};
+      final points = <({int seconds, int blueGold, int redGold})>[];
+      for (final frame in sorted) {
+        final ts = DateTime.tryParse(frame['rfc460Timestamp'] as String? ?? '');
+        if (ts == null) continue;
+        final secs = ts.difference(effectiveStart).inSeconds;
+        if (secs < 0) continue;
+        if (seen.contains(secs)) continue;
+        seen.add(secs);
+        final bg = (frame['blueTeam']?['totalGold'] as int?) ?? 0;
+        final rg = (frame['redTeam']?['totalGold'] as int?) ?? 0;
+        if (bg == 0 && rg == 0) continue;
+        points.add((seconds: secs, blueGold: bg, redGold: rg));
+      }
+      return points;
+    } catch (_) {
+      return [];
+    }
   }
 
   // Special:CargoExport 엔드포인트 — api.php와 달리 rate limit 없음
@@ -514,11 +768,13 @@ class LckApiService {
         if (w == null) return game;
 
         int? accurateDuration;
+        DateTime? gameStartUtc;
         if (game.chapterStartUtc != null && w.lastFrameTime != null) {
           final gameStart = await _getGameStartTime(game.gameId!, game.chapterStartUtc!);
           if (gameStart != null) {
             final secs = w.lastFrameTime!.difference(gameStart).inSeconds;
             if (secs > 0 && secs < 7200) accurateDuration = secs;
+            gameStartUtc = gameStart;
           }
         }
 
@@ -538,6 +794,7 @@ class LckApiService {
           durationSeconds: accurateDuration ?? game.durationSeconds,
           patchVersion: w.patchVersion,
           team1IsBlue: isLckTeam1Blue,
+          gameStartUtc: gameStartUtc ?? game.chapterStartUtc,
         );
       }),
     );
@@ -567,6 +824,244 @@ class LckApiService {
     }).toList();
 
     return MatchDetail(games: merged, team1Code: detail.team1Code);
+  }
+
+  Future<Map<String, String>> _getTeamImagesByCode() async {
+    if (_teamImagesByCode != null) return _teamImagesByCode!;
+    try {
+      final teams = await getLckTeams();
+      _teamImagesByCode = {for (final t in teams) t.code: t.imageUrl};
+    } catch (_) {
+      _teamImagesByCode = {};
+    }
+    return _teamImagesByCode!;
+  }
+
+  Future<List<LckMatch>> getLeaguepediaYearSchedule(int year) async {
+    final cacheKey = 'lp_year_$year';
+    final hit = _cache[cacheKey];
+    if (hit != null && DateTime.now().millisecondsSinceEpoch - hit.ts < _cacheTtlMs) {
+      return _parseLpYearSchedule(hit.body, await _getTeamImagesByCode());
+    }
+
+    final where = [
+      "OverviewPage LIKE 'LCK/$year%'",
+      "OverviewPage LIKE 'MSI/$year%'",
+      "OverviewPage LIKE 'Worlds/$year%'",
+      "OverviewPage LIKE 'First Stand/$year%'",
+      "OverviewPage LIKE 'Season Kickoff/$year%'",
+    ].join(' OR ');
+
+    try {
+      final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'MatchSchedule',
+        'fields': 'Team1,Team2,Team1Score,Team2Score,Winner,DateTime_UTC,OverviewPage,BestOf',
+        'where': '($where)',
+        'order by': 'DateTime_UTC ASC',
+        'format': 'json',
+        'limit': '1000',
+      });
+      final res = await http.get(uri, headers: const {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 20));
+
+      if (res.statusCode != 200 || res.body.isEmpty) return [];
+      _cache[cacheKey] = (body: res.body, ts: DateTime.now().millisecondsSinceEpoch);
+      return _parseLpYearSchedule(res.body, await _getTeamImagesByCode());
+    } catch (e) {
+      debugPrint('[LP] getLeaguepediaYearSchedule $year error: $e');
+      return [];
+    }
+  }
+
+  List<LckMatch> _parseLpYearSchedule(String body, Map<String, String> imagesByCode) {
+    try {
+      final rows = jsonDecode(body) as List;
+      final matches = <LckMatch>[];
+      for (int i = 0; i < rows.length; i++) {
+        final row = rows[i] as Map<String, dynamic>;
+        final t1Name = (row['Team1']?.toString() ?? '').trim();
+        final t2Name = (row['Team2']?.toString() ?? '').trim();
+        if (t1Name.isEmpty || t2Name.isEmpty) continue;
+
+        final t1Code = _lpNameToCode[t1Name] ?? _deriveTeamCode(t1Name);
+        final t2Code = _lpNameToCode[t2Name] ?? _deriveTeamCode(t2Name);
+
+        final dateStr = (row['DateTime UTC']?.toString() ?? row['DateTime_UTC']?.toString() ?? '').trim();
+        if (dateStr.length < 10) continue;
+        DateTime startTime;
+        try { startTime = DateTime.parse(dateStr); } catch (_) { continue; }
+
+        final winnerName = (row['Winner']?.toString() ?? '').trim();
+        final winnerCode = _lpNameToCode[winnerName] ?? (winnerName.isNotEmpty ? _deriveTeamCode(winnerName) : null);
+        final t1Score = int.tryParse(row['Team1Score']?.toString() ?? '') ?? 0;
+        final t2Score = int.tryParse(row['Team2Score']?.toString() ?? '') ?? 0;
+        final bestOf = int.tryParse(row['BestOf']?.toString() ?? '') ?? 3;
+        final overviewPage = (row['OverviewPage']?.toString() ?? '').trim();
+        final state = winnerName.isNotEmpty ? 'completed' : 'unstarted';
+
+        matches.add(LckMatch(
+          id: 'lp_${overviewPage}_${t1Code}_${t2Code}_$i',
+          startTime: startTime,
+          state: state,
+          blockName: overviewPage,
+          team1: MatchTeam(
+            name: t1Name, code: t1Code,
+            imageUrl: imagesByCode[t1Code] ?? '',
+            outcome: winnerCode == null ? null : (winnerCode == t1Code ? 'win' : 'loss'),
+            gameWins: t1Score, wins: 0, losses: 0,
+          ),
+          team2: MatchTeam(
+            name: t2Name, code: t2Code,
+            imageUrl: imagesByCode[t2Code] ?? '',
+            outcome: winnerCode == null ? null : (winnerCode == t2Code ? 'win' : 'loss'),
+            gameWins: t2Score, wins: 0, losses: 0,
+          ),
+          bestOf: bestOf,
+          hasVod: false,
+          leagueName: _overviewToLeagueName(overviewPage),
+          leagueSlug: _overviewToSlug(overviewPage),
+        ));
+      }
+      return matches;
+    } catch (e) {
+      debugPrint('[LP] parse error: $e');
+      return [];
+    }
+  }
+
+  String _deriveTeamCode(String name) {
+    if (name.isEmpty) return '???';
+    final words = name.trim().split(RegExp(r'\s+'));
+    final first = words[0];
+    // 첫 단어가 짧으면 그게 팀 약어 (G2, T1, NIP 등)
+    if (first.length <= 4 && first == first.toUpperCase()) return first;
+    // 그 외엔 이니셜
+    final initials = words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join();
+    return initials.substring(0, initials.length.clamp(1, 4));
+  }
+
+  String _overviewToSlug(String page) {
+    if (page.startsWith('MSI/')) return 'msi';
+    if (page.startsWith('Worlds/')) return 'worlds';
+    if (page.startsWith('First Stand/') || page.startsWith('Season Kickoff/')) return 'first_stand';
+    if (page.contains('Cup')) return 'lck_cup';
+    return 'lck';
+  }
+
+  String _overviewToLeagueName(String page) {
+    if (page.startsWith('MSI/')) return 'MSI';
+    if (page.startsWith('Worlds/')) return 'Worlds';
+    if (page.startsWith('First Stand/') || page.startsWith('Season Kickoff/')) return 'First Stand';
+    if (page.contains('Cup')) return 'LCK Cup';
+    return 'LCK';
+  }
+
+  // 과거 시즌 LCK 정규리그 순위표 (Leaguepedia)
+  // 반환: 스플릿 이름 → 순위 리스트 (예: {"Spring": [...], "Summer": [...]})
+  Future<Map<String, List<Standing>>> getLeaguepediaStandings(int year) async {
+    final cacheKey = 'lp_standings_$year';
+    final hit = _cache[cacheKey];
+    if (hit != null && DateTime.now().millisecondsSinceEpoch - hit.ts < _cacheTtlMs) {
+      return _parseLpStandings(hit.body, await _getTeamImagesByCode());
+    }
+
+    try {
+      final uri = Uri.https('lol.fandom.com', '/wiki/Special:CargoExport', {
+        'tables': 'MatchSchedule',
+        'fields': 'Team1,Team2,Team1Score,Team2Score,Winner,OverviewPage',
+        'where': "OverviewPage LIKE 'LCK/$year%' AND OverviewPage LIKE '%Regular Season%'",
+        'order by': 'DateTime_UTC ASC',
+        'format': 'json',
+        'limit': '500',
+      });
+      final res = await http.get(uri, headers: const {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200 || res.body.isEmpty) return {};
+      _cache[cacheKey] = (body: res.body, ts: DateTime.now().millisecondsSinceEpoch);
+      return _parseLpStandings(res.body, await _getTeamImagesByCode());
+    } catch (e) {
+      debugPrint('[LP] getLeaguepediaStandings $year error: $e');
+      return {};
+    }
+  }
+
+  Map<String, List<Standing>> _parseLpStandings(String body, Map<String, String> imagesByCode) {
+    try {
+      final rows = jsonDecode(body) as List;
+      // split → code → (series wins, losses, game wins, game losses)
+      final splitMap = <String, Map<String, ({int w, int l, int gw, int gl})>>{};
+
+      for (final r in rows) {
+        final row = r as Map<String, dynamic>;
+        final t1Name = (row['Team1']?.toString() ?? '').trim();
+        final t2Name = (row['Team2']?.toString() ?? '').trim();
+        final winnerName = (row['Winner']?.toString() ?? '').trim();
+        if (t1Name.isEmpty || t2Name.isEmpty || winnerName.isEmpty) continue;
+
+        final t1Code = _lpNameToCode[t1Name] ?? _deriveTeamCode(t1Name);
+        final t2Code = _lpNameToCode[t2Name] ?? _deriveTeamCode(t2Name);
+        final winnerCode = _lpNameToCode[winnerName] ?? _deriveTeamCode(winnerName);
+
+        final t1Score = int.tryParse(row['Team1Score']?.toString() ?? '') ?? 0;
+        final t2Score = int.tryParse(row['Team2Score']?.toString() ?? '') ?? 0;
+
+        final overviewPage = (row['OverviewPage']?.toString() ?? '').trim();
+        final parts = overviewPage.split('/');
+        // "LCK/2024 Season/Spring/Regular Season" → split = "Spring"
+        final splitName = parts.length >= 3 ? parts[parts.length - 2] : 'Regular Season';
+
+        splitMap.putIfAbsent(splitName, () => {});
+        final data = splitMap[splitName]!;
+
+        final loserCode = winnerCode == t1Code ? t2Code : t1Code;
+        final wGw = winnerCode == t1Code ? t1Score : t2Score;
+        final wGl = winnerCode == t1Code ? t2Score : t1Score;
+
+        final wOld = data[winnerCode] ?? (w: 0, l: 0, gw: 0, gl: 0);
+        data[winnerCode] = (w: wOld.w + 1, l: wOld.l, gw: wOld.gw + wGw, gl: wOld.gl + wGl);
+
+        final lOld = data[loserCode] ?? (w: 0, l: 0, gw: 0, gl: 0);
+        data[loserCode] = (w: lOld.w, l: lOld.l + 1, gw: lOld.gw + wGl, gl: lOld.gl + wGw);
+      }
+
+      final result = <String, List<Standing>>{};
+      for (final entry in splitMap.entries) {
+        final standings = entry.value.entries.map((e) {
+          return Standing(
+            rank: 0,
+            teamName: e.key,
+            teamCode: e.key,
+            imageUrl: imagesByCode[e.key] ?? '',
+            wins: e.value.w,
+            losses: e.value.l,
+            gameDiff: e.value.gw - e.value.gl,
+            gameWins: e.value.gw,
+            gameLosses: e.value.gl,
+          );
+        }).toList()
+          ..sort((a, b) {
+            final w = b.wins.compareTo(a.wins);
+            if (w != 0) return w;
+            final l = a.losses.compareTo(b.losses);
+            if (l != 0) return l;
+            return b.gameDiff.compareTo(a.gameDiff);
+          });
+
+        for (int i = 0; i < standings.length; i++) {
+          standings[i] = standings[i].copyWith(rank: i + 1);
+        }
+        result[entry.key] = standings;
+      }
+      return result;
+    } catch (e) {
+      debugPrint('[LP] parse standings error: $e');
+      return {};
+    }
   }
 
   Future<List<LckMatch>> getLiveMatches() async {

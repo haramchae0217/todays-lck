@@ -6,6 +6,8 @@ class Standing {
   final int wins;
   final int losses;
   final int gameDiff;
+  final int gameWins;
+  final int gameLosses;
 
   const Standing({
     required this.rank,
@@ -15,12 +17,14 @@ class Standing {
     required this.wins,
     required this.losses,
     this.gameDiff = 0,
+    this.gameWins = 0,
+    this.gameLosses = 0,
   });
 
   int get totalGames => wins + losses;
   double get winRate => totalGames == 0 ? 0 : wins / totalGames;
 
-  Standing copyWith({int? rank, int? gameDiff}) {
+  Standing copyWith({int? rank, int? gameDiff, int? gameWins, int? gameLosses}) {
     return Standing(
       rank: rank ?? this.rank,
       teamName: teamName,
@@ -29,6 +33,8 @@ class Standing {
       wins: wins,
       losses: losses,
       gameDiff: gameDiff ?? this.gameDiff,
+      gameWins: gameWins ?? this.gameWins,
+      gameLosses: gameLosses ?? this.gameLosses,
     );
   }
 }

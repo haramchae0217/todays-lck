@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../constants/colors.dart';
 import '../models/match.dart';
 import '../services/notification_service.dart';
 import '../utils/team_utils.dart';
@@ -14,12 +15,6 @@ String _formatBlockName(String raw) {
   return raw;
 }
 
-const _kAccent = Color(0xFF0891B2);
-const _kLive = Color(0xFFEF4444);
-const _kTextHigh = Color(0xFF0F172A);
-const _kTextMid = Color(0xFF64748B);
-const _kTextLow = Color(0xFF94A3B8);
-const _kBorder = Color(0xFFE2E8F0);
 
 class MatchCard extends StatelessWidget {
   final LckMatch match;
@@ -44,33 +39,14 @@ class _CardBody extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFF111528),
         borderRadius: BorderRadius.circular(12),
         border: match.isLive
-            ? Border.all(color: _kLive, width: 1.5)
-            : Border.all(color: _kBorder, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+            ? Border.all(color: AppColors.live, width: 1.5)
+            : Border.all(color: AppColors.border, width: 1),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Stack(
         children: [
-          if (match.isLive)
-            Container(
-              height: 2,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_kLive, _kLive.withValues(alpha: 0.3), Colors.transparent],
-                  stops: const [0.0, 0.6, 1.0],
-                ),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-              ),
-            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             child: Row(
@@ -82,7 +58,7 @@ class _CardBody extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: _kTextMid,
+                    color: AppColors.textMid,
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -94,7 +70,7 @@ class _CardBody extends StatelessWidget {
                   flex: 2,
                   child: Text(
                     _formatBlockName(match.blockName),
-                    style: const TextStyle(color: _kTextLow, fontSize: 10),
+                    style: const TextStyle(color: AppColors.textLow, fontSize: 10),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -107,6 +83,22 @@ class _CardBody extends StatelessWidget {
               ],
             ),
           ),
+          if (match.isLive)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: 2,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppColors.live, AppColors.live.withValues(alpha: 0.3), Colors.transparent],
+                    stops: const [0.0, 0.6, 1.0],
+                  ),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -114,6 +106,13 @@ class _CardBody extends StatelessWidget {
 
   Widget _leagueChip() {
     final color = _leagueColor();
+    final label = switch (match.leagueSlug) {
+      'first_stand' => 'FS',
+      'lck_cup'     => 'Cup',
+      'msi'         => 'MSI',
+      'worlds'      => 'Worlds',
+      _             => match.leagueName,
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
@@ -122,7 +121,7 @@ class _CardBody extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.40), width: 0.8),
       ),
       child: Text(
-        match.leagueName,
+        label,
         style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: color),
       ),
     );
@@ -133,7 +132,8 @@ class _CardBody extends StatelessWidget {
       case 'msi': return const Color(0xFFD97706);
       case 'worlds': return const Color(0xFFEA580C);
       case 'first_stand': return const Color(0xFF7C3AED);
-      default: return _kAccent;
+      case 'lck_cup': return const Color(0xFF059669);
+      default: return AppColors.accent;
     }
   }
 
@@ -142,7 +142,7 @@ class _CardBody extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: _kLive,
+          color: AppColors.live,
           borderRadius: BorderRadius.circular(4),
         ),
         child: const Text('LIVE',
@@ -156,17 +156,17 @@ class _CardBody extends StatelessWidget {
           color: const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(4),
         ),
-        child: const Text('종료', style: TextStyle(fontSize: 9, color: _kTextLow)),
+        child: const Text('종료', style: TextStyle(fontSize: 9, color: AppColors.textLow)),
       );
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: _kAccent.withValues(alpha: 0.10),
+        color: AppColors.accent.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(4),
       ),
       child: const Text('예정',
-          style: TextStyle(fontSize: 9, color: _kAccent, fontWeight: FontWeight.w600)),
+          style: TextStyle(fontSize: 9, color: AppColors.accent, fontWeight: FontWeight.w600)),
     );
   }
 }
@@ -192,8 +192,8 @@ class _CompactMatchRow extends StatelessWidget {
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                   color: match.isCompleted
-                      ? (t1Win ? _kTextHigh : _kTextLow)
-                      : _kTextHigh,
+                      ? (t1Win ? AppColors.textHigh : AppColors.textLow)
+                      : AppColors.textHigh,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -210,7 +210,7 @@ class _CompactMatchRow extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
-                    color: _kTextHigh,
+                    color: AppColors.textHigh,
                     letterSpacing: 1,
                   ),
                 )
@@ -219,7 +219,7 @@ class _CompactMatchRow extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
-                    color: match.isLive ? _kLive : _kTextLow,
+                    color: match.isLive ? AppColors.live : AppColors.textLow,
                   ),
                 ),
         ),
@@ -234,8 +234,8 @@ class _CompactMatchRow extends StatelessWidget {
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                   color: match.isCompleted
-                      ? (t2Win ? _kTextHigh : _kTextLow)
-                      : _kTextHigh,
+                      ? (t2Win ? AppColors.textHigh : AppColors.textLow)
+                      : AppColors.textHigh,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -261,7 +261,7 @@ class _CompactMatchRow extends StatelessWidget {
           url,
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) =>
-              const Icon(Icons.shield, size: 18, color: _kTextLow),
+              const Icon(Icons.shield, size: 18, color: AppColors.textLow),
         ),
       ),
     );
@@ -320,7 +320,7 @@ class _SmallBellButtonState extends State<_SmallBellButton> {
         child: Icon(
           _subscribed! ? Icons.notifications_active : Icons.notifications_none_outlined,
           size: 16,
-          color: _subscribed! ? _kAccent : _kTextLow,
+          color: _subscribed! ? AppColors.accent : AppColors.textLow,
         ),
       ),
     );

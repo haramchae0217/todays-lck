@@ -25,50 +25,50 @@ class LckApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        brightness: Brightness.light,
-        scaffoldBackgroundColor: const Color(0xFFF1F5F9),
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF0A0E1A),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF0891B2),
-          brightness: Brightness.light,
+          brightness: Brightness.dark,
         ).copyWith(
           primary: const Color(0xFF0891B2),
-          surface: Colors.white,
+          surface: const Color(0xFF111528),
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
+          backgroundColor: Color(0xFF0A0E1A),
           elevation: 0,
           scrolledUnderElevation: 0,
           surfaceTintColor: Colors.transparent,
           titleTextStyle: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.bold,
-            color: Color(0xFF0F172A),
+            color: Color(0xFFF1F5F9),
             letterSpacing: -0.3,
           ),
-          iconTheme: IconThemeData(color: Color(0xFF475569)),
+          iconTheme: IconThemeData(color: Color(0xFF94A3B8)),
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: Colors.white,
+          backgroundColor: const Color(0xFF0D1225),
           surfaceTintColor: Colors.transparent,
-          indicatorColor: const Color(0xFF0891B2).withValues(alpha: 0.12),
+          indicatorColor: const Color(0xFF0891B2).withValues(alpha: 0.15),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             final selected = states.contains(WidgetState.selected);
             return TextStyle(
               fontSize: 11,
               fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-              color: selected ? const Color(0xFF0891B2) : const Color(0xFF94A3B8),
+              color: selected ? const Color(0xFF0891B2) : const Color(0xFF475569),
             );
           }),
           iconTheme: WidgetStateProperty.resolveWith((states) {
             final selected = states.contains(WidgetState.selected);
             return IconThemeData(
-              color: selected ? const Color(0xFF0891B2) : const Color(0xFF94A3B8),
+              color: selected ? const Color(0xFF0891B2) : const Color(0xFF475569),
               size: 22,
             );
           }),
         ),
-        dividerColor: const Color(0xFFE2E8F0),
-        cardColor: Colors.white,
+        dividerColor: const Color(0xFF1E293B),
+        cardColor: const Color(0xFF111528),
       ),
       home: const _AuthGate(),
     );
